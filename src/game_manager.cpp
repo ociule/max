@@ -8134,6 +8134,10 @@ void GameManager_ProgressBuildState(uint16_t team) {
         GameManager_OptimizeProduction(team, it->Get(), false, true);
     }
 
+    // Engineer completion happens before the first in-game tick and autosave.
+    // Resolve here regardless of whether autosaving is enabled.
+    UnitsManager_ResolvePowerCaptures();
+
     GameManager_GameState = GAME_STATE_8_IN_GAME;
 }
 

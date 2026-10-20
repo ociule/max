@@ -39,6 +39,7 @@ add_executable(
     smartobjectarray.cpp
     smartstring.cpp
     buildmenuhotkeys.cpp
+    powercapture.cpp
 )
 
 if(NOT BUILD_SHARED_LIBS)

@@ -80,6 +80,8 @@ void UnitsManager_SetInitialMining(UnitInfo* unit, int32_t grid_x, int32_t grid_
 void UnitsManager_StartBuild(UnitInfo* unit);
 bool UnitsManager_IsUnitUnderWater(UnitInfo* unit);
 void UnitsManager_UpdateConnectors(UnitInfo* unit);
+// Finish queued construction captures at a simulation boundary or before saving.
+void UnitsManager_ResolvePowerCaptures();
 void UnitsManager_RecountBuiltStatistics();
 void UnitsManager_DestroyUnit(UnitInfo* unit, bool count_casualty = false);
 SmartPointer<UnitInfo> UnitsManager_DeployUnit(ResourceID unit_type, uint16_t team, Complex* complex, int32_t grid_x,

@@ -376,6 +376,10 @@ bool SaveLoad_Save(const std::filesystem::path& filepath, const char* const save
     SmartFileWriter file;
     const uint32_t map_cell_count{static_cast<uint32_t>(ResourceManager_MapSize.x * ResourceManager_MapSize.y)};
 
+    // Save the completed construction and its capture together. Loading must not
+    // need to rediscover or replay a capture from an unsaved in-memory queue.
+    UnitsManager_ResolvePowerCaptures();
+
     if (file.Open(filepath.string())) {
         bool error{false};
 

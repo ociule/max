@@ -2041,12 +2041,17 @@ void UnitInfo::AttachComplex(Complex* complex) {
     }
 }
 
-void UnitInfo::AttachToPrimaryComplex() {
-    SmartPointer<Complex> unit_complex;
+void UnitInfo::AttachToPrimaryComplex(Complex* primary_complex) {
+    SmartPointer<Complex> unit_complex(primary_complex);
 
     if (complex) {
         complex->Shrink(*this);
         complex = nullptr;
+    }
+
+    if (primary_complex) {
+        AttachComplex(primary_complex);
+        return;
     }
 
     if (connectors & CONNECTOR_NORTH_LEFT) {
@@ -4742,7 +4747,7 @@ void UnitInfo::ChangeTeam(uint16_t target_team) {
     path = nullptr;
     RemoveTasks();
     Ai_RemoveUnit(this);
-    Access_UpdateMapStatus(this, true);
+    Access_UpdateMapStatus(this, false);
 
     if (UnitsManager_TeamInfo[team].heat_map) {
         visible_to_team[team] = UnitsManager_TeamInfo[team].heat_map->GetComplete(grid_x, grid_y) > 0;
