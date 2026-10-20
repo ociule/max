@@ -23,6 +23,7 @@
 
 #include "abstractmenu.hpp"
 #include "builder.hpp"
+#include "buildmenuhotkeys.hpp"
 #include "cargo.hpp"
 #include "cursor.hpp"
 #include "game_manager.hpp"
@@ -52,6 +53,7 @@ public:
     ~BuildUnitTypeSelector();
 
     void Draw();
+    void SelectIndex(int64_t index);
 };
 
 class AbstractBuildMenu : public AbstractMenu {
@@ -68,6 +70,12 @@ protected:
 
     SmartObjectArray<ResourceID> unit_types;
     BuildUnitTypeSelector* selector;
+    BuildMenuHotkeys hotkeys;
+    bool hotkey_selection_pending{false};
+
+    bool ProcessItemHotkey(int32_t key);
+    void SelectBuildRate(uint16_t rate);
+    virtual ResourceID GetSelectedUnitType() const;
 
     Button* button_up_arrow;
     Button* button_down_arrow;
@@ -125,7 +133,8 @@ class FactoryBuildMenu : public AbstractBuildMenu {
     Button* button_build_queue_build;
     Button* button_build_queue_repeat;
 
-    void AddSelection();
+    void AddSelection(bool append = false);
+    ResourceID GetSelectedUnitType() const override;
     void RemoveSelection();
 
 public:
@@ -161,6 +170,17 @@ BuildUnitTypeSelector::BuildUnitTypeSelector(Window* window, WindowInfo* window_
 }
 
 BuildUnitTypeSelector::~BuildUnitTypeSelector() { delete[] sprite; }
+
+void BuildUnitTypeSelector::SelectIndex(int64_t index) {
+    if (index < 0 || index >= static_cast<int64_t>(unit_types.GetCount())) {
+        return;
+    }
+
+    page_max_index = index;
+    ScrollTo(index);
+    Draw();
+    Select(0);
+}
 
 void BuildUnitTypeSelector::Draw() {
     struct ImageSimpleHeader* local_image;
@@ -236,6 +256,7 @@ AbstractBuildMenu::AbstractBuildMenu(ResourceID resource_id, UnitInfo* unit)
 
     for (const auto buildable_unit : Builder_GetBuildableUnits(unit->team, unit->GetUnitType())) {
         unit_types.PushBack(&buildable_unit);
+        hotkeys.Add(ResourceManager_GetUnit(buildable_unit).GetSingularName());
     }
 
     Add(true);
@@ -283,7 +304,49 @@ bool AbstractBuildMenu::EventHandler(Event* event) {
     return result;
 }
 
+bool AbstractBuildMenu::ProcessItemHotkey(int32_t key) {
+    const int index = hotkeys.Match(key, static_cast<int>(selector->GetPageMaxIndex()));
+
+    if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
+        if (index >= 0) {
+            selector->SelectIndex(index);
+            hotkey_selection_pending = true;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+ResourceID AbstractBuildMenu::GetSelectedUnitType() const { return selector->GetLast(); }
+
+void AbstractBuildMenu::SelectBuildRate(uint16_t rate) {
+    const ResourceID selected = GetSelectedUnitType();
+    if (selected == INVALID_ID) {
+        return;
+    }
+
+    const int32_t max_rate = unit->GetUnitType() == TRAINHAL
+                                 ? 1
+                                 : BuildMenu_GetMaxPossibleBuildRate(unit->GetUnitType(), GetTurnsToBuild(selected),
+                                                                     unit->storage);
+    if (rate > max_rate) {
+        return;
+    }
+
+    build_rate = rate;
+    build_rate_x1->SetRestState(rate == 1);
+    build_rate_x2->SetRestState(rate == 2);
+    build_rate_x4->SetRestState(rate == 4);
+    (rate == 1 ? build_rate_x1 : rate == 2 ? build_rate_x2 : build_rate_x4)->PlaySound();
+    Draw(selected);
+}
+
 bool AbstractBuildMenu::ProcessKey(int32_t key) {
+    if (ProcessItemHotkey(key)) {
+        return true;
+    }
+
     bool result;
 
     result = true;
@@ -310,34 +373,31 @@ bool AbstractBuildMenu::ProcessKey(int32_t key) {
             Build();
         } break;
 
+        case GNW_KB_KEY_1:
         case 1101: {
-            build_rate = 1;
-            build_rate_x1->PlaySound();
-            Draw(selector->GetLast());
+            SelectBuildRate(1);
         } break;
 
+        case GNW_KB_KEY_2:
         case 1102: {
-            build_rate = 2;
-            build_rate_x2->PlaySound();
-            Draw(selector->GetLast());
+            SelectBuildRate(2);
         } break;
 
+        case GNW_KB_KEY_3:
         case 1103: {
-            build_rate = 4;
-            build_rate_x4->PlaySound();
-            Draw(selector->GetLast());
+            SelectBuildRate(4);
         } break;
 
         case 1104: {
             button_description->PlaySound();
             button_description_rest_state = true;
-            Draw(selector->GetLast());
+            Draw(GetSelectedUnitType());
         } break;
 
         case 1105: {
             button_description->PlaySound();
             button_description_rest_state = false;
-            Draw(selector->GetLast());
+            Draw(GetSelectedUnitType());
         } break;
 
         case 1106: {
@@ -476,7 +536,7 @@ void AbstractBuildMenu::InitControls() {
 
     selector->Draw();
 
-    Draw(selector->GetLast());
+    Draw(GetSelectedUnitType());
 
     // Ensure window is drawn to screen even when no buildable units are available
     win_draw(window.id);
@@ -494,7 +554,7 @@ bool AbstractBuildMenu::Select(UnitTypeSelector* type_selector, bool mode) {
             Build();
 
         } else {
-            Draw(selector->GetLast());
+            Draw(GetSelectedUnitType());
         }
 
         result = true;
@@ -1054,6 +1114,10 @@ FactoryBuildMenu::~FactoryBuildMenu() {
 }
 
 bool FactoryBuildMenu::ProcessKey(int32_t key) {
+    if (ProcessItemHotkey(key)) {
+        return true;
+    }
+
     bool result;
 
     result = true;
@@ -1151,9 +1215,12 @@ void FactoryBuildMenu::InitControls() {
     AbstractBuildMenu::InitControls();
 
     if (build_queue->GetCount() > 0) {
+        active_selector = cargo_selector;
         Draw(cargo_selector->GetLast());
     }
 }
+
+ResourceID FactoryBuildMenu::GetSelectedUnitType() const { return active_selector->GetLast(); }
 
 int32_t FactoryBuildMenu::GetTurnsToBuild(ResourceID unit_type) {
     int32_t result;
@@ -1169,6 +1236,10 @@ int32_t FactoryBuildMenu::GetTurnsToBuild(ResourceID unit_type) {
 }
 
 void FactoryBuildMenu::Build() {
+    if (hotkey_selection_pending) {
+        AddSelection(true);
+    }
+
     const char* const BuildMenu_EventStrings_Available2[] = {_(c4e7), _(803c), _(3346)};
     SmartObjectArray<ResourceID> build_list = unit->GetBuildList();
 
@@ -1208,6 +1279,7 @@ void FactoryBuildMenu::Build() {
 bool FactoryBuildMenu::Select(UnitTypeSelector* type_selector, bool mode) {
     bool result;
 
+    hotkey_selection_pending = false;
     active_selector = type_selector;
 
     if (type_selector == selector) {
@@ -1237,13 +1309,13 @@ bool FactoryBuildMenu::Select(UnitTypeSelector* type_selector, bool mode) {
     return result;
 }
 
-void FactoryBuildMenu::AddSelection() {
+void FactoryBuildMenu::AddSelection(bool append) {
     ResourceID unit_type;
 
     unit_type = selector->GetLast();
 
     if (Builder_IsBuildable(unit->team, unit_type)) {
-        cargo_selector->Add(unit_type, cargo_selector->GetPageMaxIndex() + 1);
+        cargo_selector->Add(unit_type, append ? build_queue->GetCount() : cargo_selector->GetPageMaxIndex() + 1);
     }
 }
 

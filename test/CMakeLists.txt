@@ -38,6 +38,7 @@ add_executable(
     ../src/smartfile.cpp
     smartobjectarray.cpp
     smartstring.cpp
+    buildmenuhotkeys.cpp
 )
 
 if(NOT BUILD_SHARED_LIBS)
