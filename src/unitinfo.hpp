@@ -275,7 +275,7 @@ public:
     void AssignUnitList(UnitInfo* unit);
     void ClearUnitList();
     void MoveToFrontInUnitList();
-    void AttachToPrimaryComplex();
+    void AttachToPrimaryComplex(Complex* primary_complex = nullptr);
     void DetachComplex();
     void UpdateTurretAngle(int32_t turret_angle, bool redraw = false);
     void UpdatePinCount(int32_t grid_x, int32_t grid_y, int32_t pin_units);

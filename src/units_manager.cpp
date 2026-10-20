@@ -21,14 +21,19 @@
 
 #include "units_manager.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 #include "access.hpp"
 #include "ai.hpp"
 #include "ailog.hpp"
+#include "aiplayer.hpp"
 #include "allocmenu.hpp"
 #include "builder.hpp"
 #include "buildmenu.hpp"
+#include "cargo.hpp"
 #include "cursor.hpp"
 #include "drawmap.hpp"
 #include "enums.hpp"
@@ -36,6 +41,7 @@
 #include "hash.hpp"
 #include "message_manager.hpp"
 #include "paths_manager.hpp"
+#include "powercapture.hpp"
 #include "production_manager.hpp"
 #include "quickbuild.hpp"
 #include "randomizer.hpp"
@@ -204,6 +210,8 @@ bool UnitsManager_CombatEffectsActive;
 
 int8_t UnitsManager_BobEffectQuota;
 bool UnitsManager_ResetBobState;
+
+static std::vector<SmartPointer<UnitInfo>> UnitsManager_CompletedConnections;
 
 const char* const UnitsManager_Orders[] = {
     "Awaiting",   "Transforming", "Moving",    "Firing",          "Building",  "Activate Order", "New Allocate Order",
@@ -1249,6 +1257,9 @@ void UnitsManager_Popup_InitMaster(UnitInfo* unit, struct PopupButtons* buttons)
 }
 
 void UnitsManager_InitPopupMenus() {
+    // Loading restores saved ownership and links; it must never initiate capture.
+    UnitsManager_CompletedConnections.clear();
+
     for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX; ++team) {
         UnitsManager_DelayedAttackTargets[team].Clear();
     }
@@ -1858,6 +1869,9 @@ void UnitsManager_ProcessOrders() {
 
     UnitEvent_UnitEvents.Clear();
 
+    // Completed builds and removals must finish before ownership changes.
+    UnitsManager_ResolvePowerCaptures();
+
     UnitsManager_ResetBobState = UnitsManager_BobEffectQuota;
 }
 
@@ -1963,7 +1977,8 @@ void UnitsManager_RecountBuiltStatistics() {
     }
 }
 
-void UnitsManager_UpdateConnectors(UnitInfo* unit) {
+static void UnitsManager_UpdateConnectorsInt(UnitInfo* unit, bool count_construction,
+                                             Complex* primary_complex = nullptr) {
     unit->RefreshScreen();
 
     if (unit->flags & (CONNECTOR_UNIT | BUILDING | STANDALONE)) {
@@ -1974,15 +1989,15 @@ void UnitsManager_UpdateConnectors(UnitInfo* unit) {
             int32_t grid_y = unit->grid_y;
             CTInfo* team_info = &UnitsManager_TeamInfo[unit->team];
 
-            if (UnitsManager_IsFactory(unit->GetUnitType())) {
+            if (count_construction && UnitsManager_IsFactory(unit->GetUnitType())) {
                 ++team_info->stats_factories_built;
             }
 
-            if (unit->GetUnitType() == MININGST) {
+            if (count_construction && unit->GetUnitType() == MININGST) {
                 ++team_info->stats_mines_built;
             }
 
-            if (unit->flags & BUILDING) {
+            if (count_construction && (unit->flags & BUILDING)) {
                 ++team_info->stats_buildings_built;
             }
 
@@ -2134,11 +2149,150 @@ void UnitsManager_UpdateConnectors(UnitInfo* unit) {
                 }
             }
 
-            unit->AttachToPrimaryComplex();
+            unit->AttachToPrimaryComplex(primary_complex);
 
             Access_UpdateResourcesTotal(unit->GetComplex());
         }
     }
+}
+
+void UnitsManager_UpdateConnectors(UnitInfo* unit) {
+    UnitsManager_UpdateConnectorsInt(unit, true);
+    if (unit->GetComplex() &&
+        (GameManager_GameState == GAME_STATE_8_IN_GAME || GameManager_GameState == GAME_STATE_9_END_TURN ||
+         GameManager_GameState == GAME_STATE_11_TURN_ACTIVE)) {
+        // Engineers finish Connectors during turn preparation, before the GUI
+        // returns to IN_GAME. Keep those construction events through tick end.
+        // Setup/loading, power changes, and removals never queue captures.
+        UnitsManager_CompletedConnections.emplace_back(unit);
+    }
+}
+
+void UnitsManager_ResolvePowerCaptures() {
+    if (UnitsManager_CompletedConnections.empty()) {
+        return;
+    }
+    auto completed_connections = std::move(UnitsManager_CompletedConnections);
+    UnitsManager_CompletedConnections.clear();
+
+    std::vector<SmartPointer<UnitInfo>> units;
+    for (auto it = UnitsManager_StationaryUnits.Begin(); it != UnitsManager_StationaryUnits.End(); ++it) {
+        auto& unit = *it;
+        if ((unit.flags & (CONNECTOR_UNIT | BUILDING | STANDALONE)) && !(unit.flags & GROUND_COVER) &&
+            unit.GetComplex() && unit.GetId() != UINT16_MAX && unit.hits > 0 && unit.GetOrder() != ORDER_IDLE &&
+            unit.GetOrder() != ORDER_EXPLODE && unit.GetOrder() != ORDER_AWAIT_SCALING &&
+            unit.GetOrderState() != ORDER_STATE_DESTROY) {
+            units.emplace_back(unit);
+        }
+    }
+    std::sort(units.begin(), units.end(), [](const auto& a, const auto& b) { return a->GetId() < b->GetId(); });
+
+    std::vector<PowerCapture::Structure> structures;
+    for (const auto& unit : units) {
+        const ResourceID unit_type = unit->GetUnitType();
+        const bool source = unit_type == POWGEN || unit_type == POWERSTN;
+        // An inactive station/generator is civilian. Active enemy power protects
+        // its entire complex; a pending on/off order uses its effective prior state.
+        const bool power_on = source && Cargo_GetNetProduction(unit.Get(), false).power > 0;
+        // One radar or static weapon protects every structure in its complex.
+        const bool military = unit_type == RADAR || unit_type == GUNTURRT || unit_type == ANTIAIR ||
+                              unit_type == ARTYTRRT || unit_type == ANTIMSSL;
+        structures.push_back({unit->GetId(), unit->team, 0, unit->grid_x, unit->grid_y,
+                              (unit->flags & BUILDING) ? 2 : 1, source, power_on, military, unit->connectors});
+    }
+    // Saved Complex records may include disconnected members. Resolve capture
+    // and source protection from actual paths before applying any ownership changes.
+    const auto networks = PowerCapture::FindNetworks(structures);
+    std::vector<SmartPointer<UnitInfo>> power_sources;
+    for (size_t i = 0; i < units.size(); ++i) {
+        const auto network = networks[i];
+        structures[i].network = network;
+        if (network >= power_sources.size()) {
+            power_sources.resize(network + 1);
+        }
+        if (structures[i].power_on && !power_sources[network]) {
+            power_sources[network] = units[i];
+        }
+    }
+    std::vector<uint16_t> completed_units;
+    for (const auto& unit : units) {
+        for (const auto& completed : completed_connections) {
+            if (unit == completed) {
+                completed_units.push_back(unit->GetId());
+                break;
+            }
+        }
+    }
+    const auto plan = PowerCapture::Plan(structures, completed_units);
+    std::vector<size_t> captured;
+    for (size_t i = 0; i < units.size(); ++i) {
+        if (plan.owners[i] != units[i]->team) {
+            captured.push_back(i);
+        }
+    }
+    if (captured.empty()) {
+        return;
+    }
+
+    // Unlink the captured physical group together before detaching any member.
+    // Never clear distant members just because they share a saved Complex record.
+    // The single-building removal path would repartition half-detached members.
+    for (auto i : captured) {
+        units[i]->RefreshScreen();
+        units[i]->connectors = 0;
+    }
+    for (auto i : captured) {
+        units[i]->DetachComplex();
+    }
+    for (auto i : captured) {
+        auto& unit = units[i];
+        const auto old_team = unit->team;
+        SmartPointer<UnitInfo> client(unit->GetParent());
+        if (unit->GetUnitType() == RESEARCH && unit->GetOrder() == ORDER_POWER_ON &&
+            unit->GetOrderState() != ORDER_STATE_INIT) {
+            ResearchMenu_UpdateResearchProgress(old_team, unit->research_topic, -1);
+        }
+        if (unit->GetUnitType() == GREENHSE) {
+            UnitsManager_TeamInfo[old_team].team_points -= unit->storage;
+            UnitsManager_TeamInfo[plan.owners[i]].team_points += unit->storage;
+        }
+        unit->ChangeTeam(plan.owners[i]);
+        // Retain a stored factory product or an activation already in progress.
+        // Mobile units keep their ownership when their container is captured.
+        if (client && client->GetParent() == unit.Get()) {
+            unit->SetParent(client.Get());
+        }
+        if (unit->GetUnitType() == RESEARCH && unit->GetOrder() == ORDER_POWER_ON &&
+            unit->GetOrderState() != ORDER_STATE_INIT) {
+            ResearchMenu_UpdateResearchProgress(unit->team, unit->research_topic, 1);
+        }
+        unit->AttachToPrimaryComplex(power_sources[plan.power_networks[i]]->GetComplex());
+    }
+    // Follow the live source's current complex. Earlier reconnects may merge
+    // powered bases and retire a snapshot destination; reusing that old Complex
+    // would grow it again without restoring its team's registry entry.
+    for (auto i : captured) {
+        UnitsManager_UpdateConnectorsInt(units[i].Get(), false, power_sources[plan.power_networks[i]]->GetComplex());
+    }
+    for (auto i : captured) {
+        auto& unit = units[i];
+        if (UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER) {
+            AiPlayer_Teams[unit->team].FindManager(Point(unit->grid_x, unit->grid_y))->AddUnit(*unit);
+        }
+        UnitsManager_UpdateSabotagedUnitSelection(unit.Get(), structures[i].team);
+    }
+    // Joining complexes can retire the earlier ones, so recalculate only live ones.
+    bool affected[PLAYER_TEAM_MAX]{};
+    for (auto i : captured) {
+        affected[structures[i].team] = true;
+        affected[plan.owners[i]] = true;
+    }
+    for (uint16_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX; ++team) {
+        if (affected[team]) {
+            UnitsManager_TeamInfo[team].team_units->OptimizeComplexes(team);
+        }
+    }
+    Ai_SetTasksPendingFlag("Power connection capture");
 }
 
 void UnitsManager_DestroyUnit(UnitInfo* unit, bool count_casualty) {

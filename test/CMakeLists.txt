@@ -38,6 +38,11 @@ add_executable(
     ../src/smartfile.cpp
     smartobjectarray.cpp
     smartstring.cpp
+<<<<<<< Updated upstream
+=======
+    buildmenuhotkeys.cpp
+    powercapture.cpp
+>>>>>>> Stashed changes
 )
 
 if(NOT BUILD_SHARED_LIBS)
