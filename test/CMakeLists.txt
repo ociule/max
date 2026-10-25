@@ -40,6 +40,8 @@ add_executable(
     smartstring.cpp
     buildmenuhotkeys.cpp
     powercapture.cpp
+    ../src/buildmenuhotkeys.cpp
+    ../src/utf8.cpp
 )
 
 if(NOT BUILD_SHARED_LIBS)

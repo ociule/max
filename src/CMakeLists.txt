@@ -81,6 +81,7 @@ set(LOCAL_GAME_SOURCES
 	${CMAKE_CURRENT_SOURCE_DIR}/teammissionsupplies.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/cargomenu.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/buildmenu.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/buildmenuhotkeys.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/builder.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/message_manager.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/defense_manager.cpp

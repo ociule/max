@@ -26,6 +26,7 @@
 
 std::string utf8_tolower_str(const std::string& input);
 std::string utf8_toupper_str(const std::string& input);
+std::string utf8_fold_str(const std::string& input);
 size_t utf8_strlen(const char* str);
 size_t utf8_byte_offset(const char* str, size_t codepoint_index);
 size_t utf8_prev_char_offset(const char* str, size_t byte_offset);

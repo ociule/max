@@ -24,6 +24,7 @@
 #include <SDL3/SDL.h>
 #include <utf8proc.h>
 
+#include <cstdlib>
 #include <stdexcept>
 #include <vector>
 
@@ -222,4 +223,23 @@ bool utf8_is_blank(const std::string& input) {
     }
 
     return true;
+}
+
+std::string utf8_fold_str(const std::string& input) {
+    std::string result = input;
+    utf8proc_uint8_t* folded = nullptr;
+    const utf8proc_ssize_t length = utf8proc_map(
+        reinterpret_cast<const utf8proc_uint8_t*>(input.data()), input.size(), &folded,
+        static_cast<utf8proc_option_t>(UTF8PROC_STABLE | UTF8PROC_COMPOSE | UTF8PROC_CASEFOLD | UTF8PROC_STRIPMARK));
+
+    if (length >= 0) {
+        result.assign(reinterpret_cast<const char*>(folded), length);
+
+    } else {
+        SDL_Log("UTF-8 fold error: %s.", utf8proc_errmsg(length));
+    }
+
+    free(folded);
+
+    return result;
 }
