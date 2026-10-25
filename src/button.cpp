@@ -403,6 +403,8 @@ void Button::SetSfx(ResourceID id) { sfx = id; }
 
 ButtonID Button::GetId() const { return bid; }
 
+bool Button::IsEnabled() const { return enable; }
+
 void Button::SetPValue(intptr_t p_value) { this->p_value = p_value; }
 
 void Button::SetRValue(intptr_t r_value) { this->r_value = r_value; }

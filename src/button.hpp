@@ -82,6 +82,7 @@ public:
     void Disable(bool redraw = true);
 
     void SetRestState(bool rest_state);
+    bool IsEnabled() const;
     void PlaySound() const;
     void SetSfx(ResourceID id);
     ButtonID GetId() const;

@@ -21,6 +21,9 @@
 
 #include "buildmenu.hpp"
 
+#include <deque>
+#include <string>
+
 #include "abstractmenu.hpp"
 #include "builder.hpp"
 #include "buildmenuhotkeys.hpp"
@@ -42,6 +45,10 @@
 #include "unitstats.hpp"
 #include "unittypeselector.hpp"
 #include "window_manager.hpp"
+
+// Input code for a letter that only arrives as UTF-8 text, like Cyrillic. It stays clear of the build menus' button
+// codes so the letter keeps its place among the other keys.
+static constexpr int32_t BUILD_MENU_TEXT_INPUT_KEY{1107};
 
 class BuildUnitTypeSelector : public UnitTypeSelector {
     uint8_t* sprite;
@@ -71,11 +78,12 @@ protected:
     SmartObjectArray<ResourceID> unit_types;
     BuildUnitTypeSelector* selector;
     BuildMenuHotkeys hotkeys;
-    bool hotkey_selection_pending{false};
+    std::deque<std::string> text_input;
 
     bool ProcessItemHotkey(int32_t key);
-    void SelectBuildRate(uint16_t rate);
-    virtual ResourceID GetSelectedUnitType() const;
+    bool ProcessMenuKey(int32_t key);
+    void SelectBuildRate(uint16_t rate, Button* button);
+    virtual void SelectByHotkey(int32_t index);
 
     Button* button_up_arrow;
     Button* button_down_arrow;
@@ -102,6 +110,7 @@ public:
     ~AbstractBuildMenu();
 
     bool EventHandler(Event* event);
+    int32_t ProcessTextInput(const char* text);
 
     virtual bool ProcessKey(int32_t key);
     virtual void InitControls();
@@ -112,6 +121,12 @@ public:
     void Draw(ResourceID unit_type);
     bool Run();
 };
+
+static AbstractBuildMenu* BuildMenu_ActiveMenu;
+
+static int32_t BuildMenu_TextInputCallback(const char* utf8_text) {
+    return BuildMenu_ActiveMenu ? BuildMenu_ActiveMenu->ProcessTextInput(utf8_text) : 0;
+}
 
 class MobileBuildMenu : public AbstractBuildMenu {
 public:
@@ -126,6 +141,7 @@ class FactoryBuildMenu : public AbstractBuildMenu {
     ResourceID building_id;
     UnitTypeSelector* cargo_selector;
     UnitTypeSelector* active_selector;
+    bool hotkey_selection_pending{false};
 
     Button* button_build_queue_up_arrow;
     Button* button_build_queue_down_arrow;
@@ -134,8 +150,8 @@ class FactoryBuildMenu : public AbstractBuildMenu {
     Button* button_build_queue_repeat;
 
     void AddSelection(bool append = false);
-    ResourceID GetSelectedUnitType() const override;
     void RemoveSelection();
+    void SelectByHotkey(int32_t index) override;
 
 public:
     FactoryBuildMenu(UnitInfo* unit);
@@ -304,49 +320,68 @@ bool AbstractBuildMenu::EventHandler(Event* event) {
     return result;
 }
 
-bool AbstractBuildMenu::ProcessItemHotkey(int32_t key) {
-    const int index = hotkeys.Match(key, static_cast<int>(selector->GetPageMaxIndex()));
+int32_t AbstractBuildMenu::ProcessTextInput(const char* text) {
+    if (text && text[0]) {
+        if (static_cast<unsigned char>(text[0]) < 128 && !text[1]) {
+            GNW_add_input_buffer(static_cast<unsigned char>(text[0]));
 
-    if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
-        if (index >= 0) {
-            selector->SelectIndex(index);
-            hotkey_selection_pending = true;
+        } else {
+            for (auto& letter : BuildMenuHotkeys::Letters(text)) {
+                text_input.push_back(std::move(letter));
+                GNW_add_input_buffer(BUILD_MENU_TEXT_INPUT_KEY);
+            }
         }
-        return true;
     }
 
-    return false;
+    return 0;
 }
 
-ResourceID AbstractBuildMenu::GetSelectedUnitType() const { return selector->GetLast(); }
+bool AbstractBuildMenu::ProcessItemHotkey(int32_t key) {
+    std::string letter;
 
-void AbstractBuildMenu::SelectBuildRate(uint16_t rate) {
-    const ResourceID selected = GetSelectedUnitType();
-    if (selected == INVALID_ID) {
-        return;
+    if (key == BUILD_MENU_TEXT_INPUT_KEY) {
+        if (text_input.empty()) {
+            return true;
+        }
+
+        letter = std::move(text_input.front());
+        text_input.pop_front();
+
+    } else if ((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) {
+        letter.assign(1, static_cast<char>(key));
+
+    } else {
+        hotkeys.Reset();
+
+        return false;
     }
 
-    const int32_t max_rate = unit->GetUnitType() == TRAINHAL
-                                 ? 1
-                                 : BuildMenu_GetMaxPossibleBuildRate(unit->GetUnitType(), GetTurnsToBuild(selected),
-                                                                     unit->storage);
-    if (rate > max_rate) {
-        return;
+    const int32_t index = hotkeys.Match(letter, static_cast<int32_t>(selector->GetPageMaxIndex()), timer_get());
+
+    if (index >= 0) {
+        SelectByHotkey(index);
     }
 
-    build_rate = rate;
-    build_rate_x1->SetRestState(rate == 1);
-    build_rate_x2->SetRestState(rate == 2);
-    build_rate_x4->SetRestState(rate == 4);
-    (rate == 1 ? build_rate_x1 : rate == 2 ? build_rate_x2 : build_rate_x4)->PlaySound();
-    Draw(selected);
+    return true;
 }
 
-bool AbstractBuildMenu::ProcessKey(int32_t key) {
-    if (ProcessItemHotkey(key)) {
-        return true;
-    }
+void AbstractBuildMenu::SelectByHotkey(int32_t index) { selector->SelectIndex(index); }
 
+void AbstractBuildMenu::SelectBuildRate(uint16_t rate, Button* button) {
+    // Draw() enables only the rates that are possible for the displayed unit.
+    if (button->IsEnabled()) {
+        build_rate = rate;
+        build_rate_x1->SetRestState(button == build_rate_x1);
+        build_rate_x2->SetRestState(button == build_rate_x2);
+        build_rate_x4->SetRestState(button == build_rate_x4);
+        button->PlaySound();
+        Draw(selector->GetLast());
+    }
+}
+
+bool AbstractBuildMenu::ProcessKey(int32_t key) { return ProcessItemHotkey(key) || ProcessMenuKey(key); }
+
+bool AbstractBuildMenu::ProcessMenuKey(int32_t key) {
     bool result;
 
     result = true;
@@ -375,29 +410,29 @@ bool AbstractBuildMenu::ProcessKey(int32_t key) {
 
         case GNW_KB_KEY_1:
         case 1101: {
-            SelectBuildRate(1);
+            SelectBuildRate(1, build_rate_x1);
         } break;
 
         case GNW_KB_KEY_2:
         case 1102: {
-            SelectBuildRate(2);
+            SelectBuildRate(2, build_rate_x2);
         } break;
 
         case GNW_KB_KEY_3:
         case 1103: {
-            SelectBuildRate(4);
+            SelectBuildRate(4, build_rate_x4);
         } break;
 
         case 1104: {
             button_description->PlaySound();
             button_description_rest_state = true;
-            Draw(GetSelectedUnitType());
+            Draw(selector->GetLast());
         } break;
 
         case 1105: {
             button_description->PlaySound();
             button_description_rest_state = false;
-            Draw(GetSelectedUnitType());
+            Draw(selector->GetLast());
         } break;
 
         case 1106: {
@@ -536,7 +571,7 @@ void AbstractBuildMenu::InitControls() {
 
     selector->Draw();
 
-    Draw(GetSelectedUnitType());
+    Draw(selector->GetLast());
 
     // Ensure window is drawn to screen even when no buildable units are available
     win_draw(window.id);
@@ -554,7 +589,7 @@ bool AbstractBuildMenu::Select(UnitTypeSelector* type_selector, bool mode) {
             Build();
 
         } else {
-            Draw(GetSelectedUnitType());
+            Draw(selector->GetLast());
         }
 
         result = true;
@@ -858,8 +893,15 @@ bool AbstractBuildMenu::Run() {
     event_success = false;
     event_click_path_build = false;
 
+    BuildMenu_ActiveMenu = this;
+
     while (!event_click_cancel) {
+        // Registered only while polling, so that menus opened from here receive their own text input.
+        GNW_register_utf8_input(BuildMenu_TextInputCallback);
+
         int32_t key = get_input();
+
+        GNW_unregister_utf8_input();
 
         if (GameManager_RequestMenuExit || unit->GetOrder() == ORDER_DISABLE || unit->team != GameManager_PlayerTeam) {
             key = GNW_KB_KEY_ESCAPE;
@@ -871,6 +913,9 @@ bool AbstractBuildMenu::Run() {
 
         GameManager_ProcessState(false);
     }
+
+    BuildMenu_ActiveMenu = nullptr;
+    text_input.clear();
 
     GameManager_EnableMainMenu(unit);
     GameManager_ProcessTick(true);
@@ -1160,10 +1205,13 @@ bool FactoryBuildMenu::ProcessKey(int32_t key) {
                     result = true;
 
                 } else {
-                    result = AbstractBuildMenu::ProcessKey(key);
+                    result = ProcessMenuKey(key);
                 }
 
             } else {
+                // A mouse click confirms the queue as shown. Only Enter adds an item picked by its shortcut.
+                hotkey_selection_pending = false;
+
                 if (event_release == false) {
                     key -= GNW_INPUT_PRESS;
 
@@ -1177,7 +1225,7 @@ bool FactoryBuildMenu::ProcessKey(int32_t key) {
                         } break;
 
                         default: {
-                            AbstractBuildMenu::ProcessKey(key + GNW_INPUT_PRESS);
+                            ProcessMenuKey(key + GNW_INPUT_PRESS);
                         } break;
                     }
                 }
@@ -1215,12 +1263,9 @@ void FactoryBuildMenu::InitControls() {
     AbstractBuildMenu::InitControls();
 
     if (build_queue->GetCount() > 0) {
-        active_selector = cargo_selector;
         Draw(cargo_selector->GetLast());
     }
 }
-
-ResourceID FactoryBuildMenu::GetSelectedUnitType() const { return active_selector->GetLast(); }
 
 int32_t FactoryBuildMenu::GetTurnsToBuild(ResourceID unit_type) {
     int32_t result;
@@ -1317,6 +1362,12 @@ void FactoryBuildMenu::AddSelection(bool append) {
     if (Builder_IsBuildable(unit->team, unit_type)) {
         cargo_selector->Add(unit_type, append ? build_queue->GetCount() : cargo_selector->GetPageMaxIndex() + 1);
     }
+}
+
+void FactoryBuildMenu::SelectByHotkey(int32_t index) {
+    AbstractBuildMenu::SelectByHotkey(index);
+
+    hotkey_selection_pending = true;
 }
 
 void FactoryBuildMenu::RemoveSelection() {

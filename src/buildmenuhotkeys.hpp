@@ -22,11 +22,14 @@
 #ifndef BUILDMENUHOTKEYS_HPP
 #define BUILDMENUHOTKEYS_HPP
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
 
-// Initials and name-prefix matching, independent of drawing and build orders.
+// Initials and name-prefix matching, independent of drawing and build orders. Names and typed letters are compared
+// in any script, ignoring case and diacritics. A word is a run of letters, so "Anti-Aircraft" and "D.C.A." have the
+// initials "aa" and "dca".
 class BuildMenuHotkeys {
     struct Item {
         std::string initials;
@@ -35,93 +38,22 @@ class BuildMenuHotkeys {
 
     std::vector<Item> items;
     std::string pending;
-    int sequence_selected{-1};
+    int32_t sequence_selected{-1};
+    uint64_t last_letter_time{0};
 
 public:
-    static std::string Initials(std::string_view name) {
-        std::string result;
-        bool word_start = true;
+    // Letters typed further apart than this many milliseconds start a new sequence.
+    static constexpr uint64_t SEQUENCE_TIMEOUT{1000};
 
-        for (char letter : name) {
-            if (letter == ' ' || letter == '-' || letter == '\t') {
-                word_start = true;
-            } else {
-                if (word_start && ((letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z'))) {
-                    result += letter >= 'A' && letter <= 'Z' ? letter + ('a' - 'A') : letter;
-                }
-                word_start = false;
-            }
-        }
+    static std::string Initials(std::string_view name);
+    static std::vector<std::string> Letters(std::string_view text);
 
-        return result;
-    }
+    void Add(std::string_view name);
+    void Reset();
 
-    void Add(std::string_view name) {
-        std::string letters;
-        for (char letter : name) {
-            if (letter >= 'A' && letter <= 'Z') letter += 'a' - 'A';
-            if (letter >= 'a' && letter <= 'z') letters += letter;
-        }
-        items.push_back({Initials(name), letters});
-    }
-    void Reset() { pending.clear(); }
-
-    // Returns completed initials or a unique name prefix, otherwise -1.
-    // Repeating an identical shortcut cycles through items sharing those initials.
-    int Match(int key, int selected) {
-        if (key >= 'A' && key <= 'Z') {
-            key += 'a' - 'A';
-        }
-        if (key < 'a' || key > 'z') {
-            Reset();
-            return -1;
-        }
-
-        if (pending.empty()) sequence_selected = selected;
-        pending += static_cast<char>(key);
-        for (int attempt = 0; attempt < 2; ++attempt) {
-            bool prefix = false;
-            bool longer = false;
-            int first = -1;
-            int next = -1;
-            int name_match = -1;
-            int name_count = 0;
-
-            for (int i = 0; i < static_cast<int>(items.size()); ++i) {
-                if (items[i].initials.starts_with(pending)) {
-                    prefix = true;
-                    if (items[i].initials.size() > pending.size()) {
-                        longer = true;
-                    } else {
-                        if (first < 0) first = i;
-                        if (next < 0 && i > sequence_selected) next = i;
-                    }
-                }
-
-                if (items[i].name.starts_with(pending)) {
-                    prefix = true;
-                    longer = longer || items[i].name.size() > pending.size();
-                    name_match = i;
-                    ++name_count;
-                }
-            }
-
-            if (prefix) {
-                // Explicit initials win over a prefix of another item's name.
-                int match = next >= 0 ? next : first;
-                if (match < 0 && pending.size() > 1 && name_count == 1) match = name_match;
-                if (!longer) Reset();
-                return match;
-            }
-
-            // A mistyped or abandoned sequence must not swallow a fresh shortcut.
-            pending.assign(1, static_cast<char>(key));
-            sequence_selected = selected;
-        }
-
-        Reset();
-        return -1;
-    }
+    // Appends a typed letter to the sequence. Returns the index of the item whose initials, or unique name prefix, the
+    // sequence spells, otherwise -1. Repeating an identical shortcut cycles through items sharing those initials.
+    int32_t Match(std::string_view letter, int32_t selected, uint64_t time);
 };
 
 #endif /* BUILDMENUHOTKEYS_HPP */
