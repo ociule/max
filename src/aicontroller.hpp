@@ -65,6 +65,11 @@ public:
 
     virtual void FileSave(SmartFileWriter& file) = 0;
     virtual void FileLoad(SmartFileReader& file) = 0;
+
+    /**
+     * \brief Returns how many map cells the team has explored, or -1 if the controller does not track it.
+     */
+    virtual int32_t GetExploredCells() const { return -1; }
 };
 
 enum AiControllerType : uint8_t {

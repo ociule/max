@@ -44,6 +44,7 @@ public:
     void RemoveUnit(UnitInfo* unit) override;
     void FileSave(SmartFileWriter& file) override;
     void FileLoad(SmartFileReader& file) override;
+    int32_t GetExploredCells() const override;
 };
 
 #endif /* CLASSICAI_HPP */

@@ -23,6 +23,7 @@
 
 #include "ai.hpp"
 #include "aiplayer.hpp"
+#include "resource_manager.hpp"
 
 bool ClassicAi::SetupStrategy() { return Ai_SetupStrategy(m_team); }
 
@@ -45,3 +46,20 @@ void ClassicAi::RemoveUnit(UnitInfo* unit) { AiPlayer_Teams[m_team].RemoveUnit(u
 void ClassicAi::FileSave(SmartFileWriter& file) { AiPlayer_Teams[m_team].FileSave(file); }
 
 void ClassicAi::FileLoad(SmartFileReader& file) { AiPlayer_Teams[m_team].FileLoad(file); }
+
+int32_t ClassicAi::GetExploredCells() const {
+    uint8_t** info_map = AiPlayer_Teams[m_team].GetInfoMap();
+    int32_t result = 0;
+
+    if (info_map) {
+        for (int32_t x = 0; x < ResourceManager_MapSize.x; ++x) {
+            for (int32_t y = 0; y < ResourceManager_MapSize.y; ++y) {
+                if (info_map[x][y] & INFO_MAP_EXPLORED) {
+                    ++result;
+                }
+            }
+        }
+    }
+
+    return result;
+}
