@@ -22,6 +22,7 @@
 #ifndef JEVAI_HPP
 #define JEVAI_HPP
 
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -30,27 +31,35 @@
 #include "unitinfo.hpp"
 
 /**
- * \brief Proof of concept computer player that explores with the Jev decision model.
+ * \brief Computer player that asks the Jev decision model what each factory and each mobile land unit does.
  *
- * Jev moves every mobile land unit of the team, one unit and one move at a time. For each move the game lists up to
- * 16 legal destinations with facts about each (unexplored cells revealed, danger, distance to the nearest enemy) plus
- * "stay", and Jev picks one. Nothing else is played: no building, research or attacks other than automatic return fire.
- * Strategy, starting units and saves come from NoneAi.
+ * Each turn the controller first releases finished units from factories and building sites. Then it asks one question
+ * per idle factory (which unit to produce, or nothing) and one or more per mobile land unit (where to move, what to
+ * build for constructors and engineers, or stay). The game lists only legal options and attaches facts to each one;
+ * Jev picks. Jev chooses what to build, the game chooses where. Strategy, starting units and saves come from NoneAi.
  */
 class JevAi final : public NoneAi {
-    enum class State { SELECT_UNIT, WAIT_FOR_ANSWER, WAIT_FOR_MOVE };
+    enum class State { SELECT, WAIT_FOR_ANSWER, WAIT_FOR_UNIT };
+
+    enum class Action { STAY, MOVE, BUILD, PRODUCE };
 
     struct Option {
         std::string key;
+        Action action;
         Point destination;
+        ResourceID unit_type;
         std::string facts;
         int32_t score;
     };
 
-    State m_state{State::SELECT_UNIT};
+    State m_state{State::SELECT};
     std::vector<SmartPointer<UnitInfo>> m_units;
+    std::vector<SmartPointer<UnitInfo>> m_handled;
     SmartPointer<UnitInfo> m_unit;
     std::vector<Option> m_options;
+    std::string m_question;
+    Option m_pending_build{};
+    bool m_has_pending_build{false};
     Point m_move_start;
     uint64_t m_wait_start{0};
     int32_t m_unit_picks{0};
@@ -58,6 +67,7 @@ class JevAi final : public NoneAi {
     int32_t m_turn_questions{0};
     int32_t m_turn_moves{0};
     int32_t m_turn_failed_moves{0};
+    int32_t m_turn_builds{0};
     int32_t m_units_lost{0};
     int32_t m_explored_cells{0};
     int32_t m_last_turn{0};
@@ -67,10 +77,20 @@ class JevAi final : public NoneAi {
 
     bool IsExplored(Point point) const;
     int32_t CountUnexplored(Point center, int32_t scan) const;
+    int32_t GetDistanceToUnexplored(Point point) const;
     int32_t GetDanger(UnitInfo* unit, Point point, int32_t* nearest_enemy) const;
-    void BuildOptions(UnitInfo* unit);
-    bool Ask(UnitInfo* unit);
+    int32_t CountOwnUnits(ResourceID unit_type) const;
+    bool TouchesBase(ResourceID unit_type, Point site) const;
+    bool FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const;
+    bool ReleaseFinishedUnit();
+    UnitInfo* FindIdleFactory() const;
+    void AddMoveOptions(UnitInfo* unit);
+    void AddBuildOptions(UnitInfo* builder);
+    void AddProduceOptions(UnitInfo* factory);
+    nlohmann::ordered_json GetState(UnitInfo* unit) const;
+    bool Ask(UnitInfo* unit, const char* instructions);
     void Apply(const std::string& answer);
+    void StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site);
     void FinishUnit();
     const char* GetTeamName() const;
 

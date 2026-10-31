@@ -2,7 +2,7 @@
 """Bridge between M.A.X. Port's Jev computer player and the Jev decision model.
 
 The game connects to 127.0.0.1:PORT and sends one JSON line per question:
-    {"id": 1, "team": "red", "state": {...}, "questions": {"move": {...}}, "mock_scores": {...}}
+    {"id": 1, "team": "red", "state": {...}, "questions": {"action": {...}}, "mock_scores": {...}}
 The bridge adds the model, calls https://api.typesafe.ai/v1/systemone with the TYPESAFE_API_KEY from the
 environment or from .env in the repository root, and answers with one line:
     {"id": 1, "choice": "m3", "model": "jev-1.14.0", "confidence": 0.9, "probabilities": {...}}
@@ -63,7 +63,7 @@ def ask_jev(key, model, request, timeout):
         'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'})
     with urllib.request.urlopen(http_request, timeout=timeout, context=TLS_CONTEXT) as response:
         result = json.loads(response.read())
-    answer = result['answers']['move']
+    answer = next(iter(result['answers'].values()))
     return {'choice': answer['choice'], 'model': result.get('model', model), 'confidence': answer.get('confidence'),
             'probabilities': answer.get('probabilities'), 'usage': result.get('usage')}
 
@@ -97,7 +97,8 @@ class Bridge:
         with self.log_lock:
             self.log.write(json.dumps({'time': time.time(), 'request': request, 'reply': reply}) + '\n')
             self.log.flush()
-        options = request.get('questions', {}).get('move', {}).get('criteria', {})
+        question = next(iter(request.get('questions', {}).values()), {})
+        options = question.get('criteria', {})
         summary = reply.get('error') or f"{reply['choice']}: {options.get(reply['choice'], '?')}"
         print(f"{request.get('team')} q{request.get('id')} {reply['milliseconds']} ms "
               f"{reply.get('model', '')} -> {summary}", flush=True)
