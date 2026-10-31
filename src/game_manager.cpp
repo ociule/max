@@ -29,6 +29,7 @@
 
 #include "access.hpp"
 #include "ai.hpp"
+#include "aicontroller.hpp"
 #include "ailog.hpp"
 #include "buildmenu.hpp"
 #include "cargomenu.hpp"
@@ -512,7 +513,7 @@ void GameManager_TeamTurnConcurrent(int32_t& game_state) {
 
     for (uint8_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
         if (game_state != GAME_STATE_10_LOAD_GAME && GameManager_PlayerTeam != team &&
-            (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER ||
+            (AiController_Get(team) != nullptr ||
              UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_REMOTE)) {
             GameManager_ActiveTurnTeam = team;
 
@@ -521,7 +522,7 @@ void GameManager_TeamTurnConcurrent(int32_t& game_state) {
     }
 
     for (uint8_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-        if (team != GameManager_PlayerTeam && UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
+        if (team != GameManager_PlayerTeam && AiController_Get(team) != nullptr) {
             Ai_BeginTurn(team);
         }
     }
@@ -896,7 +897,7 @@ void GameManager_HandleTurnTimer() {
 
         if (timer_setting < 15) {
             for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-                if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER &&
+                if (AiController_Get(team) != nullptr &&
                     !UnitsManager_TeamInfo[team].finished_turn) {
                     timer_setting = 15;
                     flag = true;
@@ -2416,7 +2417,7 @@ void GameManager_UpdateGui(uint16_t team, int32_t game_state, bool enable_autosa
         GameManager_GameState = GAME_STATE_11_TURN_ACTIVE;
     }
 
-    if (ini_timer_setting == 0 && UnitsManager_TeamInfo[GameManager_PlayerTeam].team_type == TEAM_TYPE_COMPUTER) {
+    if (ini_timer_setting == 0 && AiController_Get(GameManager_PlayerTeam) != nullptr) {
         ini_timer_setting = 45;
     }
 
@@ -3079,7 +3080,7 @@ bool GameManager_InitGame() {
     }
 
     for (int32_t i = PLAYER_TEAM_RED; i < PLAYER_TEAM_MAX - 1; ++i) {
-        if (UnitsManager_TeamInfo[i].team_type == TEAM_TYPE_COMPUTER) {
+        if (AiController_Get(i) != nullptr) {
             if (GameManager_PlayerTeam == PLAYER_TEAM_ALIEN) {
                 GameManager_PlayerTeam = i;
             }
@@ -3088,7 +3089,7 @@ bool GameManager_InitGame() {
                 GameManager_InitMap();
             }
 
-            if (Ai_SetupStrategy(i)) {
+            if (AiController_Get(i)->SetupStrategy()) {
                 if (Remote_IsNetworkGame) {
                     Remote_SendNetPacket_12(i);
                 }
@@ -5383,14 +5384,14 @@ void GameManager_ProcessKey() {
     if (GameManager_RequestMenuExit) {
         if (UnitsManager_TeamInfo[GameManager_PlayerTeam].finished_turn) {
             for (int32_t team = 0; team < PLAYER_TEAM_MAX - 1; ++team) {
-                if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER &&
+                if (AiController_Get(team) != nullptr &&
                     !UnitsManager_TeamInfo[team].finished_turn) {
                     GameManager_RefreshOrders(team, true);
                 }
             }
 
         } else if (UnitsManager_TeamInfo[GameManager_PlayerTeam].team_type == TEAM_TYPE_PLAYER ||
-                   UnitsManager_TeamInfo[GameManager_PlayerTeam].team_type == TEAM_TYPE_COMPUTER) {
+                   AiController_Get(GameManager_PlayerTeam) != nullptr) {
             GameManager_DisableMainMenu();
 
             if (MessageManager_MessageBox_IsActive) {

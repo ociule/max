@@ -178,6 +178,8 @@ set(LOCAL_GAME_SOURCES
 	${CMAKE_CURRENT_SOURCE_DIR}/groundpath.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/airpath.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/builderpath.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/aicontroller.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/classicai.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/ai.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/aiattack.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/aiplayer.cpp
