@@ -300,7 +300,13 @@ static void Settings_RelaxAdditionalProperties(json& schema) {
     return result;
 }
 
+void Settings::DisableSaving() { m_saving_disabled = true; }
+
 [[nodiscard]] bool Settings::Save() {
+    if (m_saving_disabled) {
+        return true;
+    }
+
     std::ifstream infile(m_filepath.string().c_str());
     json jscript;
     bool file_existed = false;

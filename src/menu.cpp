@@ -28,6 +28,7 @@
 #include "button.hpp"
 #include "chooseplayermenu.hpp"
 #include "clanselectmenu.hpp"
+#include "commandline.hpp"
 #include "cursor.hpp"
 #include "desyncmenu.hpp"
 #include "dialogmenu.hpp"
@@ -421,6 +422,10 @@ void menu_draw_game_over_screen(WindowInfo* window, const int32_t* const team_pl
 }
 
 void menu_wrap_up_game(const WinLoss_Status& status, const int32_t turn_counter, bool mode) {
+    if (CommandLine_LogResult(status, turn_counter)) {
+        return;
+    }
+
     const auto mission = ResourceManager_GetMissionManager()->GetMission();
     const auto mission_category = mission->GetCategory();
     bool is_winner;

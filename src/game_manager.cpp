@@ -33,6 +33,7 @@
 #include "ailog.hpp"
 #include "buildmenu.hpp"
 #include "cargomenu.hpp"
+#include "commandline.hpp"
 #include "chatmenu.hpp"
 #include "cursor.hpp"
 #include "drawmap.hpp"
@@ -586,6 +587,8 @@ bool GameManager_TeamTurnFinish(uint32_t turn_counter_session_start, uint16_t te
 
     if (GameManager_GameState == GAME_STATE_9_END_TURN) {
         AILOG(log, "End turn {}.", GameManager_TurnCounter);
+
+        CommandLine_LogTurn(GameManager_TurnCounter);
 
         GameManager_GameState = GAME_STATE_8_IN_GAME;
 
@@ -2981,7 +2984,7 @@ void GameManager_InitUnitsAndGameState() {
     if (Remote_IsNetworkGame) {
         Randomizer_SetSeed(time(nullptr));
     } else {
-        Remote_RngSeed = time(nullptr);
+        Remote_RngSeed = CommandLine_GetSeed(time(nullptr));
         Randomizer_SetSeed(Remote_RngSeed);
     }
 

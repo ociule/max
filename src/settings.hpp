@@ -48,6 +48,11 @@ public:
     [[nodiscard]] bool Load();
     [[nodiscard]] bool Save();
 
+    /**
+     * \brief Makes Save() do nothing, so temporary changes never reach settings.json.
+     */
+    void DisableSaving();
+
     [[nodiscard]] int32_t GetNumericValue(const std::string& key, int32_t default_value = 0) const;
     // a lookup by string literal, kept per thread until the settings change
     [[nodiscard]] int32_t GetNumericValue(const char* key, int32_t default_value = 0) const;
@@ -62,6 +67,7 @@ private:
     void ValidateNames();
 
     std::filesystem::path m_filepath;
+    bool m_saving_disabled{false};
     std::unique_ptr<std::unordered_map<std::string, SettingValue>> m_loaded_settings;
     std::unique_ptr<std::vector<std::pair<std::string, SettingDefinition>>> m_setting_definitions;
     // changes whenever a setting changes, so cached lookups know they are stale

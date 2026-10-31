@@ -21,6 +21,7 @@
 
 #include <SDL3/SDL_main.h>
 
+#include "commandline.hpp"
 #include "crash_reporter.hpp"
 #include "menu.hpp"
 #include "movie.hpp"
@@ -29,6 +30,12 @@
 #include "transport.hpp"
 
 int main(int argc, char* argv[]) {
+    const int32_t exit_code = CommandLine_Parse(argc, argv);
+
+    if (exit_code >= 0) {
+        return exit_code;
+    }
+
     try {
         ResourceManager_InitResources();
 
@@ -36,14 +43,19 @@ int main(int argc, char* argv[]) {
             SDL_Log("Transport_Init() failed, networked play is unavailable.");
         }
 
-        if (Movie_PlayIntro()) {
-            menu_draw_logo(ILOGO, 3000);
+        if (CommandLine_IsGame()) {
+            CommandLine_RunGame();
+
+        } else {
+            if (Movie_PlayIntro()) {
+                menu_draw_logo(ILOGO, 3000);
+            }
+
+            ResourceManager_GetSoundManager().PlayMusic(MAIN_MSC, false);
+            menu_draw_logo(MLOGO, 3000);
+
+            main_menu();
         }
-
-        ResourceManager_GetSoundManager().PlayMusic(MAIN_MSC, false);
-        menu_draw_logo(MLOGO, 3000);
-
-        main_menu();
 
     } catch (const std::exception& e) {
         SDL_Log("Unhandled exception: %s.", e.what());
