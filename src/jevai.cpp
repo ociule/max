@@ -520,8 +520,8 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
 
 json JevAi::GetState(UnitInfo* unit) const {
     json state;
-    json buildings;
-    json units;
+    json buildings = json::object();
+    json units = json::object();
     int32_t nearest_enemy;
     int32_t enemies_seen = 0;
 
