@@ -33,7 +33,7 @@
  * \brief Proof of concept computer player that explores with the Jev decision model.
  *
  * Jev moves every mobile land unit of the team, one unit and one move at a time. For each move the game lists up to
- * 17 legal destinations with facts about each (unexplored cells revealed, danger, distance to the nearest enemy) plus
+ * 16 legal destinations with facts about each (unexplored cells revealed, danger, distance to the nearest enemy) plus
  * "stay", and Jev picks one. Nothing else is played: no building, research or attacks other than automatic return fire.
  * Strategy, starting units and saves come from NoneAi.
  */
@@ -60,6 +60,8 @@ class JevAi final : public NoneAi {
     int32_t m_turn_failed_moves{0};
     int32_t m_units_lost{0};
     int32_t m_explored_cells{0};
+    int32_t m_last_turn{0};
+    bool m_turn_done_logged{false};
     std::vector<uint8_t> m_explored;
     JevBridge m_bridge;
 
