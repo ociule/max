@@ -25,6 +25,7 @@
 
 #include "access.hpp"
 #include "ai.hpp"
+#include "aicontroller.hpp"
 #include "ailog.hpp"
 #include "builder.hpp"
 #include "buildmenu.hpp"
@@ -1578,7 +1579,7 @@ void UnitInfo::AttackUnit(UnitInfo* enemy, int32_t attack_potential, int32_t dir
         if (hits > 0) {
             ScheduleDelayedTasks(true);
 
-            if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
+            if (AiController_IsClassic(team)) {
                 Ai_AddUnitToTrackerList(this);
             }
         }
@@ -2809,7 +2810,7 @@ void UnitInfo::SpotByTeam(uint16_t team) {
         visible_to_team[team] = true;
         spotted_by_team[team] = true;
 
-        if (UnitsManager_TeamInfo[this->team].team_type == TEAM_TYPE_COMPUTER) {
+        if (AiController_IsClassic(this->team)) {
             Ai_AddUnitToTrackerList(this);
         }
 

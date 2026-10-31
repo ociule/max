@@ -23,6 +23,7 @@
 
 #include "access.hpp"
 #include "ai.hpp"
+#include "aicontroller.hpp"
 #include "ailog.hpp"
 #include "aiplayer.hpp"
 #include "builder.hpp"
@@ -143,7 +144,7 @@ bool TaskManager::AreTasksThinking(uint16_t team) {
 void TaskManager::CheckComputerReactions() {
     if (GameManager_PlayMode != PLAY_MODE_UNKNOWN) {
         if (GameManager_PlayMode != PLAY_MODE_TURN_BASED ||
-            UnitsManager_TeamInfo[GameManager_ActiveTurnTeam].team_type == TEAM_TYPE_COMPUTER) {
+            AiController_IsClassic(GameManager_ActiveTurnTeam)) {
             AILOG(log, "Checking computer reactions");
 
             for (auto it = tasks.Begin(), it_end = tasks.End(); it != it_end; ++it) {
@@ -158,7 +159,7 @@ void TaskManager::CheckComputerReactions() {
                 // a waiting check goes back to the reminders once its unit can act or is no longer ours to check
                 for (auto it = units_awaiting_reaction.Begin(), it_end = units_awaiting_reaction.End(); it != it_end;
                      ++it) {
-                    if ((*it).hits == 0 || UnitsManager_TeamInfo[(*it).team].team_type != TEAM_TYPE_COMPUTER ||
+                    if ((*it).hits == 0 || !AiController_IsClassic((*it).team) ||
                         TaskManager_IsReadyToReact(it->Get())) {
                         AppendReminder(new (std::nothrow) RemindRetreat(*it), true);
 
@@ -171,7 +172,7 @@ void TaskManager::CheckComputerReactions() {
 }
 
 void TaskManager::CheckUnitReaction(UnitInfo& unit) {
-    if (unit.hits > 0 && UnitsManager_TeamInfo[unit.team].team_type == TEAM_TYPE_COMPUTER) {
+    if (unit.hits > 0 && AiController_IsClassic(unit.team)) {
         if (TaskManager_IsReadyToReact(&unit)) {
             AILOG(log, "Reaction check for {} at [{},{}].",
                   ResourceManager_GetUnit(unit.GetUnitType()).GetSingularName().data(), unit.grid_x + 1,
@@ -209,7 +210,7 @@ void TaskManager::CollectPotentialAttackTargets(UnitInfo* unit) {
             for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
                  it != it_end; ++it) {
                 if ((*it).team != unit->team && (*it).IsVisibleToTeam(unit->team) &&
-                    UnitsManager_TeamInfo[(*it).team].team_type == TEAM_TYPE_COMPUTER &&
+                    AiController_IsClassic((*it).team) &&
                     Access_GetSquaredDistance(it->Get(), unit) <= range) {
                     EnqueueUnitForReactionCheck(*it);
                 }
@@ -220,7 +221,7 @@ void TaskManager::CollectPotentialAttackTargets(UnitInfo* unit) {
             for (auto it = UnitsManager_MobileAirUnits.Begin(), it_end = UnitsManager_MobileAirUnits.End();
                  it != it_end; ++it) {
                 if ((*it).team != unit->team && (*it).IsVisibleToTeam(unit->team) &&
-                    UnitsManager_TeamInfo[(*it).team].team_type == TEAM_TYPE_COMPUTER &&
+                    AiController_IsClassic((*it).team) &&
                     Access_GetSquaredDistance(it->Get(), unit) <= range) {
                     EnqueueUnitForReactionCheck(*it);
                 }
@@ -410,7 +411,7 @@ void TaskManager::ClearUnitTasksAndRemindAvailable(UnitInfo* unit, bool priority
     unit->RemoveTasks();
     unit->ChangeAiStateBits(UnitInfo::AI_STATE_MOVE_FINISHED_REMINDER, false);
 
-    if (unit->hits > 0 && UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER) {
+    if (unit->hits > 0 && AiController_IsClassic(unit->team)) {
         Reminder* reminder = new (std::nothrow) class RemindAvailable(*unit);
 
         AppendReminder(reminder, priority);
@@ -418,7 +419,7 @@ void TaskManager::ClearUnitTasksAndRemindAvailable(UnitInfo* unit, bool priority
 }
 
 void TaskManager::FindTaskForUnit(UnitInfo* unit) {
-    if (UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER) {
+    if (AiController_IsClassic(unit->team)) {
         if (!(unit->flags & STATIONARY) || unit->GetBaseValues()->GetAttribute(ATTRIB_AMMO) ||
             unit->GetUnitType() == LIGHTPLT || unit->GetUnitType() == LANDPLT || unit->GetUnitType() == SHIPYARD ||
             unit->GetUnitType() == AIRPLT || unit->GetUnitType() == TRAINHAL) {

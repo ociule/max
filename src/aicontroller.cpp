@@ -24,19 +24,72 @@
 #include <array>
 
 #include "classicai.hpp"
+#include "game_manager.hpp"
+#include "noneai.hpp"
 #include "units_manager.hpp"
 
 static std::array<ClassicAi, PLAYER_TEAM_MAX - 1> AiController_ClassicTeams{
     ClassicAi(PLAYER_TEAM_RED), ClassicAi(PLAYER_TEAM_GREEN), ClassicAi(PLAYER_TEAM_BLUE), ClassicAi(PLAYER_TEAM_GRAY)};
 
+static std::array<NoneAi, PLAYER_TEAM_MAX - 1> AiController_NoneTeams{
+    NoneAi(PLAYER_TEAM_RED), NoneAi(PLAYER_TEAM_GREEN), NoneAi(PLAYER_TEAM_BLUE), NoneAi(PLAYER_TEAM_GRAY)};
+
+static std::array<AiControllerType, PLAYER_TEAM_MAX - 1> AiController_Types{
+    AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC};
+
 AiController* AiController_Get(uint16_t team) {
     AiController* result;
 
-    if (team < AiController_ClassicTeams.size() && UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
-        result = &AiController_ClassicTeams[team];
+    if (team < AiController_Types.size() && UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
+        switch (AiController_Types[team]) {
+            case AI_CONTROLLER_NONE: {
+                result = &AiController_NoneTeams[team];
+            } break;
+
+            default: {
+                result = &AiController_ClassicTeams[team];
+            } break;
+        }
 
     } else {
         result = nullptr;
+    }
+
+    return result;
+}
+
+void AiController_SetType(uint16_t team, AiControllerType type) {
+    if (team < AiController_Types.size()) {
+        AiController_Types[team] = type;
+    }
+}
+
+bool AiController_IsClassic(uint16_t team) {
+    return team < AiController_Types.size() && UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER &&
+           AiController_Types[team] == AI_CONTROLLER_CLASSIC;
+}
+
+bool AiController_EndTurn(uint16_t team) {
+    bool is_demo = true;
+
+    for (int32_t i = PLAYER_TEAM_RED; i < PLAYER_TEAM_MAX - 1; ++i) {
+        if (UnitsManager_TeamInfo[i].team_type == TEAM_TYPE_PLAYER ||
+            UnitsManager_TeamInfo[i].team_type == TEAM_TYPE_REMOTE) {
+            is_demo = false;
+        }
+    }
+
+    bool result;
+
+    // same condition as AiPlayer::CheckEndTurn
+    if (!UnitsManager_TeamInfo[team].finished_turn &&
+        (GameManager_PlayMode == PLAY_MODE_TURN_BASED || GameManager_GameState == GAME_STATE_9_END_TURN || is_demo)) {
+        GameManager_RefreshOrders(team, true);
+
+        result = true;
+
+    } else {
+        result = false;
     }
 
     return result;

@@ -28,11 +28,13 @@
 #include <ctime>
 #include <string>
 
+#include "aicontroller.hpp"
 #include "game_manager.hpp"
 #include "menu.hpp"
 #include "missionmanager.hpp"
 #include "resource_manager.hpp"
 #include "settings.hpp"
+#include "task.hpp"
 #include "units_manager.hpp"
 #include "winloss.hpp"
 
@@ -46,11 +48,15 @@ struct CommandLine_Options {
     int32_t play_mode{PLAY_MODE_TURN_BASED};
     int32_t turns{100};
     int32_t team_types[PLAYER_TEAM_MAX - 1]{TEAM_TYPE_COMPUTER, TEAM_TYPE_COMPUTER, TEAM_TYPE_NONE, TEAM_TYPE_NONE};
+    AiControllerType controllers[PLAYER_TEAM_MAX - 1]{AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC,
+                                                      AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC};
 };
 
 static CommandLine_Options CommandLine_Values;
 
 static const char* const CommandLine_TeamNames[PLAYER_TEAM_MAX - 1] = {"red", "green", "blue", "gray"};
+
+static const char* const CommandLine_ControllerNames[] = {"classic", "none", "jev"};
 
 static const char* const CommandLine_Usage =
     "Usage: max-port [options]\n"
@@ -58,6 +64,9 @@ static const char* const CommandLine_Usage =
     "\n"
     "  --teams LIST       player type of red, green, blue and gray: computer, player or none.\n"
     "                     Missing teams are none. Default: computer,computer\n"
+    "  --controllers LIST computer player of red, green, blue and gray: classic, none (does nothing)\n"
+    "                     or jev (moves its land units with the Jev decision model, see\n"
+    "                     tools/jev_bridge.py). Missing teams are classic. Default: classic\n"
     "  --world N          planet, 0 to 23, in the order of the planet menu. Default: 0\n"
     "  --opponent N       computer skill, 0 (clueless) to 5 (god). Default: 2 (average)\n"
     "  --play-mode MODE   turn-based or simultaneous. Default: turn-based\n"
@@ -128,6 +137,36 @@ static bool CommandLine_ParseTeams(const std::string& text, int32_t* team_types)
     return active_teams >= 2;
 }
 
+static bool CommandLine_ParseControllers(const std::string& text, AiControllerType* controllers) {
+    size_t start = 0;
+
+    for (int32_t team = 0; team < PLAYER_TEAM_MAX - 1 && start <= text.size(); ++team) {
+        size_t end = text.find(',', start);
+
+        if (end == std::string::npos) {
+            end = text.size();
+        }
+
+        const std::string name = text.substr(start, end - start);
+        bool found = false;
+
+        for (uint8_t type = AI_CONTROLLER_CLASSIC; type <= AI_CONTROLLER_JEV; ++type) {
+            if (name == CommandLine_ControllerNames[type]) {
+                controllers[team] = static_cast<AiControllerType>(type);
+                found = true;
+            }
+        }
+
+        if (!found) {
+            return false;
+        }
+
+        start = end + 1;
+    }
+
+    return start > text.size();
+}
+
 int32_t CommandLine_Parse(int argc, char* argv[]) {
     auto& options = CommandLine_Values;
 
@@ -147,6 +186,10 @@ int32_t CommandLine_Parse(int argc, char* argv[]) {
 
         } else if (option == "--teams") {
             valid = CommandLine_ParseTeams(value, options.team_types);
+            ++i;
+
+        } else if (option == "--controllers") {
+            valid = CommandLine_ParseControllers(value, options.controllers);
             ++i;
 
         } else if (option == "--world") {
@@ -255,6 +298,18 @@ void CommandLine_RunGame() {
                                                                    : CommandLine_TeamNames[team]);
     }
 
+    std::string controllers;
+
+    for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
+        AiController_SetType(team, options.controllers[team]);
+
+        if (options.team_types[team] == TEAM_TYPE_COMPUTER) {
+            controllers += std::string(" ") + CommandLine_TeamNames[team] + " " +
+                           CommandLine_ControllerNames[options.controllers[team]] + ";";
+        }
+    }
+
+    SDL_Log("Command line: computer players:%s", controllers.c_str());
     SDL_Log("Command line: world %d, opponent %d, %s, %d turns, seed %u.", options.world, options.opponent,
             (options.play_mode == PLAY_MODE_TURN_BASED) ? "turn-based" : "simultaneous", options.turns, options.seed);
 
@@ -272,10 +327,15 @@ void CommandLine_LogTurn(int32_t turn) {
 
     int32_t units[PLAYER_TEAM_MAX]{};
     int32_t buildings[PLAYER_TEAM_MAX]{};
+    int32_t tasked[PLAYER_TEAM_MAX]{};
 
     for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_MobileAirUnits}) {
         for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
             ++units[(*it).team];
+
+            if ((*it).GetTask()) {
+                ++tasked[(*it).team];
+            }
         }
     }
 
@@ -288,9 +348,9 @@ void CommandLine_LogTurn(int32_t turn) {
 
     for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
         if (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE) {
-            line += std::string(" ") + CommandLine_TeamNames[team] + " units " + std::to_string(units[team]) +
-                    " buildings " + std::to_string(buildings[team]) + " points " +
-                    std::to_string(UnitsManager_TeamInfo[team].team_points) + ";";
+            line += std::string(" ") + CommandLine_TeamNames[team] + " units " + std::to_string(units[team]) + " (" +
+                    std::to_string(tasked[team]) + " with classic tasks) buildings " + std::to_string(buildings[team]) +
+                    " points " + std::to_string(UnitsManager_TeamInfo[team].team_points) + ";";
         }
     }
 
