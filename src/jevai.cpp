@@ -617,9 +617,64 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
     }
 
     const int32_t rate = Cargo_GetRawConsumptionRate(builder->GetUnitType(), 1);
+    int32_t spare_power = 0;
+    int32_t spare_fuel = 0;
+    bool enemies_seen = false;
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team == m_team && (*it).GetComplex()) {
+            Cargo mining;
+            Cargo mining_capacity;
+            int32_t burned = 0;
+
+            (*it).GetComplex()->GetCargoMining(mining, mining_capacity);
+
+            for (auto it2 = UnitsManager_StationaryUnits.Begin(), it2_end = UnitsManager_StationaryUnits.End();
+                 it2 != it2_end; ++it2) {
+                if ((*it2).GetComplex() == (*it).GetComplex() && (*it2).GetUnitType() == POWGEN &&
+                    (*it2).GetOrder() == ORDER_POWER_ON) {
+                    burned += Cargo_GetFuelConsumptionRate(POWGEN);
+                }
+            }
+
+            spare_power = (*it).GetComplex()->power;
+            spare_fuel = mining_capacity.fuel - burned;
+            break;
+        }
+    }
+
+    for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_StationaryUnits}) {
+        for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
+            if ((*it).team != m_team && (*it).team != PLAYER_TEAM_ALIEN && (*it).hits > 0 &&
+                (*it).IsVisibleToTeam(m_team)) {
+                enemies_seen = true;
+            }
+        }
+    }
 
     for (const ResourceID unit_type : Builder_GetBuildableUnits(m_team, builder->GetUnitType())) {
         Point site;
+
+        // the game only offers buildings that make sense now
+        if (unit_type == POWGEN) {
+            if (spare_power > 0 || spare_fuel < Cargo_GetFuelConsumptionRate(POWGEN)) {
+                continue;
+            }
+
+        } else if (JevAi_IsFactory(unit_type)) {
+            if ((unit_type != LIGHTPLT && unit_type != LANDPLT) || CountOwnUnits(unit_type) >= 2) {
+                continue;
+            }
+
+        } else if (unit_type == GUNTURRT || unit_type == ARTYTRRT || unit_type == ANTIMSSL || unit_type == RADAR) {
+            if (!enemies_seen) {
+                continue;
+            }
+
+        } else if (unit_type != MININGST) {
+            continue;
+        }
 
         if (!FindBuildSite(builder, unit_type, site)) {
             continue;
@@ -646,6 +701,10 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
             Survey_GetTotalResourcesInArea(site.x, site.y, 1, &raw, &gold, &fuel, false, m_team);
 
+            if (raw + fuel + gold == 0) {
+                continue;
+            }
+
             facts += ", surveyed resources under it raw " + std::to_string(raw) + " fuel " + std::to_string(fuel) +
                      " gold " + std::to_string(gold);
             score = (raw + fuel + gold) > 0 ? 40 + raw + fuel + gold : -10;
@@ -662,7 +721,9 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
             if (unit_type == POWGEN) {
                 facts += ", burns " + std::to_string(Cargo_GetFuelConsumptionRate(POWGEN)) + " fuel per turn for " +
-                         std::to_string(-Cargo_GetPowerConsumptionRate(POWGEN)) + " power";
+                         std::to_string(-Cargo_GetPowerConsumptionRate(POWGEN)) +
+                         " power; the base has no spare power and mines " + std::to_string(spare_fuel) +
+                         " spare fuel per turn";
 
             } else if (Cargo_GetPowerConsumptionRate(unit_type) > 0) {
                 facts += ", needs " + std::to_string(Cargo_GetPowerConsumptionRate(unit_type)) + " power";
@@ -758,9 +819,25 @@ void JevAi::AddRefillOptions(UnitInfo* builder) {
 
         if (std::max(dx, dy) <= 1) {
             const int32_t amount = std::min<int32_t>(capacity - builder->storage, materials.raw);
+            UnitInfo* source = nullptr;
+
+            // the base shares its materials, but they leave from a building that stores raw materials
+            for (auto it2 = UnitsManager_StationaryUnits.Begin(), it2_end = UnitsManager_StationaryUnits.End();
+                 it2 != it2_end; ++it2) {
+                if ((*it2).GetComplex() == building.GetComplex() && (*it2).hits > 0 &&
+                    (*it2).GetOrder() != ORDER_TRANSFER &&
+                    ResourceManager_GetUnit((*it2).GetUnitType()).GetCargoType() == Unit::CargoType::CARGO_TYPE_RAW &&
+                    (!source || (*it2).storage > source->storage)) {
+                    source = it2->Get();
+                }
+            }
+
+            if (!source) {
+                continue;
+            }
 
             m_options.push_back({"r" + std::to_string(m_options.size()), Action::REFILL, Point(), INVALID_ID,
-                                 SmartPointer<UnitInfo>(&building),
+                                 SmartPointer<UnitInfo>(source),
                                  "take " + std::to_string(amount) + " raw materials from the " +
                                      JevAi_GetUnitName(&building) + " next to you, you carry " +
                                      std::to_string(builder->storage) + " of " + std::to_string(capacity) +
