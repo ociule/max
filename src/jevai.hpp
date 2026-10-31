@@ -56,6 +56,7 @@ class JevAi final : public NoneAi {
     State m_state{State::SELECT};
     std::vector<SmartPointer<UnitInfo>> m_units;
     std::vector<SmartPointer<UnitInfo>> m_handled;
+    std::vector<uint16_t> m_lost;
     SmartPointer<UnitInfo> m_unit;
     SmartPointer<UnitInfo> m_refill_source;
     std::vector<Option> m_options;
