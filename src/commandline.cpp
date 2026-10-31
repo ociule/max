@@ -384,7 +384,18 @@ bool CommandLine_LogResult(const WinLoss_Status& status, int32_t turn) {
 
     for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
         if (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE) {
+            const CTInfo& info = UnitsManager_TeamInfo[team];
+            uint32_t losses = 0;
+
+            for (const uint32_t casualty : info.casualties) {
+                losses += casualty;
+            }
+
             line += std::string(" ") + CommandLine_TeamNames[team] + " rank " + std::to_string(status.team_rank[team]) +
+                    ", units built " + std::to_string(info.stats_units_built) + ", buildings built " +
+                    std::to_string(info.stats_buildings_built) + ", factories built " +
+                    std::to_string(info.stats_factories_built) + ", mines built " +
+                    std::to_string(info.stats_mines_built) + ", units and buildings lost " + std::to_string(losses) +
                     ";";
         }
     }

@@ -1203,6 +1203,7 @@ void JevAi::BeginTurn() {
         m_explored.clear();
         m_explored_cells = 0;
         m_units_lost = 0;
+        m_lost.clear();
     }
 
     m_last_turn = GameManager_TurnCounter;
@@ -1499,7 +1500,10 @@ void JevAi::SetInfoMapPoint(Point point) {
 }
 
 void JevAi::RemoveUnit(UnitInfo* unit) {
-    if (unit->team == m_team && unit->hits == 0 && (unit->flags & MOBILE_LAND_UNIT)) {
+    // the removal notice can come more than once for the same unit
+    if (unit->team == m_team && unit->hits == 0 && (unit->flags & MOBILE_LAND_UNIT) &&
+        std::find(m_lost.begin(), m_lost.end(), unit->unit_id) == m_lost.end()) {
+        m_lost.push_back(unit->unit_id);
         ++m_units_lost;
 
         SDL_Log("Jev %s: lost %s at %s.", GetTeamName(), JevAi_GetUnitName(unit).c_str(),
