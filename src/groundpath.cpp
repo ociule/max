@@ -36,6 +36,8 @@
 static uint32_t Paths_GroundPath_TypeIndex;
 static RegisterClass Paths_GroundPath_ClassRegister("GroundPath", &Paths_GroundPath_TypeIndex, &GroundPath::Allocate);
 
+static void GroundPath_ReportImpassableStep(UnitInfo* unit, int32_t grid_x, int32_t grid_y);
+
 GroundPath::GroundPath() : m_step_index(0) {}
 
 GroundPath::GroundPath(int32_t target_x, int32_t target_y) : UnitPath(target_x, target_y), m_step_index(0) {}
@@ -396,6 +398,10 @@ bool GroundPath::Execute(UnitInfo* unit) {
         }
 
     } else {
+        if (Access_GetSurfaceType(target_grid_x, target_grid_y) == SURFACE_TYPE_AIR) {
+            GroundPath_ReportImpassableStep(unit, target_grid_x, target_grid_y);
+        }
+
         if (Access_SetUnitDestination(unit->grid_x, unit->grid_y, target_grid_x, target_grid_y,
                                       !(unit->flags & MOBILE_SEA_UNIT))) {
             if (unit->RegisterMovementWait()) {
@@ -424,6 +430,25 @@ bool GroundPath::Execute(UnitInfo* unit) {
         }
 
         return false;
+    }
+}
+
+// Diagnostic: the path planner should never route a ground unit into impassable terrain. Each unit and grid cell is
+// reported once in a row, as the refused step is retried every frame.
+void GroundPath_ReportImpassableStep(UnitInfo* unit, int32_t grid_x, int32_t grid_y) {
+    static uint16_t last_unit_id{UINT16_MAX};
+    static Point last_cell{-1, -1};
+
+    if (unit->GetId() != last_unit_id || last_cell != Point(grid_x, grid_y)) {
+        last_unit_id = unit->GetId();
+        last_cell = Point(grid_x, grid_y);
+
+        SDL_Log(
+            "GroundPath: %s %u of team %u at %03d-%03d has a path step into impassable terrain at %03d-%03d, "
+            "order %d/%d, destination %03d-%03d.",
+            ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(), unit->GetId(), unit->team,
+            unit->grid_x + 1, unit->grid_y + 1, grid_x + 1, grid_y + 1, static_cast<int32_t>(unit->GetOrder()),
+            static_cast<int32_t>(unit->GetOrderState()), unit->move_to_grid_x + 1, unit->move_to_grid_y + 1);
     }
 }
 

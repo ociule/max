@@ -31,8 +31,11 @@
 #include "timer.h"
 #include "window_manager.hpp"
 
+static uint32_t World_NextSerial{0};
+
 World::World(ResourceID resource_id)
-    : m_resource_id(resource_id),
+    : m_serial(++World_NextSerial),
+      m_resource_id(resource_id),
       m_is_fully_loaded(false),
       m_tile_count(0),
       m_layer_count(0),

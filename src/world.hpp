@@ -184,6 +184,14 @@ public:
     [[nodiscard]] const Point& GetMinimapWindowOffset() const { return m_minimap_window_offset; }
     [[nodiscard]] double GetMinimapWindowScale() const { return m_minimap_window_scale; }
 
+    /**
+     * \brief Returns a number unique to this World instance within the process.
+     *
+     * A new World can reuse the address of a deleted one, so caches derived from a World must compare this instead of
+     * the pointer.
+     */
+    [[nodiscard]] uint32_t GetSerial() const { return m_serial; }
+
 private:
     [[nodiscard]] bool ParseWrlFilePreview(FILE* fp);
     [[nodiscard]] bool LoadTilesAndMetadata(FILE* fp, DrawLoadBar* load_bar);
@@ -195,6 +203,7 @@ private:
     [[nodiscard]] std::string ComputeHash() const;
     void InitGridOverlayColors();
 
+    uint32_t m_serial;
     ResourceID m_resource_id;
     std::filesystem::path m_file_path;
     bool m_is_fully_loaded;

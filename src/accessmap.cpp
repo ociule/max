@@ -113,11 +113,13 @@ constexpr size_t SURFACE_BASE_SLOT_COUNT{32};
 
 struct SurfaceBaseCache {
     const World* world{nullptr};
+    uint32_t world_serial{0};
     Point size{0, 0};
     std::array<std::vector<uint8_t>, SURFACE_BASE_SLOT_COUNT> slots;
 
     void Reset(const World* new_world, const Point new_size) {
         world = new_world;
+        world_serial = new_world->GetSerial();
         size = new_size;
 
         for (auto& slot : slots) {
@@ -134,8 +136,14 @@ SurfaceBaseCache AccessMap_SurfaceBaseCache;
 void AccessMap::ApplySurfaceBase(int32_t surface_types, uint8_t water_value) {
     const size_t key = (static_cast<size_t>(surface_types) & 0x0F) | ((water_value == 8) ? 0x10 : 0);
 
-    // A different world or a resized map invalidates every cached base.
-    if (AccessMap_SurfaceBaseCache.world != m_world || AccessMap_SurfaceBaseCache.size != m_size) {
+    // A different world or a resized map invalidates every cached base. A new world can be allocated at the address of
+    // the previous one, so worlds are told apart by serial number.
+    if (AccessMap_SurfaceBaseCache.world_serial != m_world->GetSerial() || AccessMap_SurfaceBaseCache.size != m_size) {
+        if (AccessMap_SurfaceBaseCache.world == m_world && AccessMap_SurfaceBaseCache.size == m_size) {
+            SDL_Log("AccessMap: World %u reuses the address of world %u, discarding stale terrain cache.",
+                    m_world->GetSerial(), AccessMap_SurfaceBaseCache.world_serial);
+        }
+
         AccessMap_SurfaceBaseCache.Reset(m_world, m_size);
     }
 
