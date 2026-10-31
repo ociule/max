@@ -205,7 +205,7 @@ void Ai_EnableAutoSurvey(UnitInfo* unit) {
 bool Ai_IsDangerousLocation(UnitInfo* unit, Point destination, int32_t caution_level) {
     bool result;
 
-    if (UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER && caution_level != CAUTION_LEVEL_NONE) {
+    if (AiController_IsClassic(unit->team) && caution_level != CAUTION_LEVEL_NONE) {
         int16_t** damage_potential_map = AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level);
         int32_t unit_hits = unit->hits;
 
@@ -245,7 +245,7 @@ void Ai_UpdateTerrainDistanceField(UnitInfo* unit) {
         }
     }
 
-    if (UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER &&
+    if (AiController_IsClassic(unit->team) &&
         unit->GetBaseValues()->GetAttribute(ATTRIB_AMMO) > 0) {
         AiPlayer_Teams[unit->team].AddMilitaryUnit(unit);
     }
@@ -387,7 +387,7 @@ void Ai_CheckComputerReactions() { TaskManager.CheckComputerReactions(); }
 
 void Ai_CheckMines(UnitInfo* unit) {
     for (uint16_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-        if (unit->team != team && UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER &&
+        if (unit->team != team && AiController_IsClassic(team) &&
             unit->IsVisibleToTeam(team)) {
             AiPlayer_Teams[team].FindMines(unit);
         }

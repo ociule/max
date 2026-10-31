@@ -22,6 +22,7 @@
 #include "reminders.hpp"
 
 #include "aiattack.hpp"
+#include "aicontroller.hpp"
 #include "ailog.hpp"
 #include "task_manager.hpp"
 #include "taskdebugger.hpp"
@@ -103,7 +104,7 @@ RemindAttack::RemindAttack(UnitInfo& unit) : unit(unit) {}
 RemindAttack::~RemindAttack() {}
 
 void RemindAttack::Execute() {
-    if (unit->hits && unit->shots > 0 && UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER) {
+    if (unit->hits && unit->shots > 0 && AiController_IsClassic(unit->team)) {
         if (unit->GetTask()) {
             AILOG(log, "Attack reminder for {}", unit->GetTask()->WriteStatusLog());
         }

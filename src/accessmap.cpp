@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "access.hpp"
+#include "aicontroller.hpp"
 #include "ailog.hpp"
 #include "aiplayer.hpp"
 #include "enums.hpp"
@@ -401,7 +402,7 @@ void AccessMap::ApplyCautionLevel(UnitInfo* unit, int32_t caution_level) {
             ProcessDangers(unit);
         }
 
-        if (UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER) {
+        if (AiController_IsClassic(unit->team)) {
             int32_t unit_hits = unit->hits;
             int16_t** damage_potential_map;
 

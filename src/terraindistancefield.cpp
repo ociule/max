@@ -83,6 +83,7 @@
 #include "terraindistancefield.hpp"
 
 #include "access.hpp"
+#include "aicontroller.hpp"
 #include "resource_manager.hpp"
 #include "task_manager.hpp"
 #include "taskupdateterrain.hpp"
@@ -273,7 +274,7 @@ void TerrainDistanceField::AddAnchorAndPropagate(std::vector<uint32_t>& range_fi
 
         // Schedule lazy updates for first AI team if any
         for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-            if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
+            if (AiController_IsClassic(team)) {
                 TaskManager.AppendTask(*new (std::nothrow) TaskUpdateTerrain(team));
 
                 // Mark this cell as traversable and unevaluated (add anchor here)
@@ -349,7 +350,7 @@ void TerrainDistanceField::RemoveAnchorAndInvalidate(std::vector<uint32_t>& rang
 
         // Notify all AI teams
         for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-            if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
+            if (AiController_IsClassic(team)) {
                 TaskManager.AppendTask(*new (std::nothrow) TaskUpdateTerrain(team));
 
                 // Remove traversable flag and invalidate stored range (remove anchor here)

@@ -22,6 +22,8 @@
 #ifndef AICONTROLLER_HPP
 #define AICONTROLLER_HPP
 
+#include <cstdint>
+
 #include "point.hpp"
 
 class UnitInfo;
@@ -65,11 +67,41 @@ public:
     virtual void FileLoad(SmartFileReader& file) = 0;
 };
 
+enum AiControllerType : uint8_t {
+    /// The original computer player.
+    AI_CONTROLLER_CLASSIC,
+    /// Does nothing and ends its turns. A baseline for comparisons.
+    AI_CONTROLLER_NONE,
+    /// Moves the team's mobile land units with the Jev decision model.
+    AI_CONTROLLER_JEV,
+};
+
 /**
  * \brief Returns the controller of a team, or nullptr if the team is not run by the computer.
  *
  * Follows the team's current type, so a team gains or loses its controller as soon as its type changes.
  */
 AiController* AiController_Get(uint16_t team);
+
+/**
+ * \brief Selects the controller a team uses while it is a computer team. Every team starts with the classic one.
+ *
+ * Not saved. A loaded game uses the controllers selected when it is loaded.
+ */
+void AiController_SetType(uint16_t team, AiControllerType type);
+
+/**
+ * \brief Returns true if the classic computer player runs the team.
+ *
+ * The task manager, reaction checks and other classic AI plumbing only work for these teams.
+ */
+bool AiController_IsClassic(uint16_t team);
+
+/**
+ * \brief Ends a team's turn the way the classic computer player does, once the game allows it.
+ *
+ * \return True if the turn was ended by this call.
+ */
+bool AiController_EndTurn(uint16_t team);
 
 #endif /* AICONTROLLER_HPP */
