@@ -25,6 +25,7 @@
 
 #include "classicai.hpp"
 #include "game_manager.hpp"
+#include "jevai.hpp"
 #include "noneai.hpp"
 #include "units_manager.hpp"
 
@@ -33,6 +34,9 @@ static std::array<ClassicAi, PLAYER_TEAM_MAX - 1> AiController_ClassicTeams{
 
 static std::array<NoneAi, PLAYER_TEAM_MAX - 1> AiController_NoneTeams{
     NoneAi(PLAYER_TEAM_RED), NoneAi(PLAYER_TEAM_GREEN), NoneAi(PLAYER_TEAM_BLUE), NoneAi(PLAYER_TEAM_GRAY)};
+
+static std::array<JevAi, PLAYER_TEAM_MAX - 1> AiController_JevTeams{JevAi(PLAYER_TEAM_RED), JevAi(PLAYER_TEAM_GREEN),
+                                                                    JevAi(PLAYER_TEAM_BLUE), JevAi(PLAYER_TEAM_GRAY)};
 
 static std::array<AiControllerType, PLAYER_TEAM_MAX - 1> AiController_Types{
     AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC};
@@ -44,6 +48,10 @@ AiController* AiController_Get(uint16_t team) {
         switch (AiController_Types[team]) {
             case AI_CONTROLLER_NONE: {
                 result = &AiController_NoneTeams[team];
+            } break;
+
+            case AI_CONTROLLER_JEV: {
+                result = &AiController_JevTeams[team];
             } break;
 
             default: {

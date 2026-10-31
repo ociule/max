@@ -350,7 +350,15 @@ void CommandLine_LogTurn(int32_t turn) {
         if (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE) {
             line += std::string(" ") + CommandLine_TeamNames[team] + " units " + std::to_string(units[team]) + " (" +
                     std::to_string(tasked[team]) + " with classic tasks) buildings " + std::to_string(buildings[team]) +
-                    " points " + std::to_string(UnitsManager_TeamInfo[team].team_points) + ";";
+                    " points " + std::to_string(UnitsManager_TeamInfo[team].team_points);
+
+            AiController* controller = AiController_Get(team);
+
+            if (controller && controller->GetExploredCells() >= 0) {
+                line += " explored " + std::to_string(controller->GetExploredCells());
+            }
+
+            line += ";";
         }
     }
 
