@@ -86,6 +86,7 @@ class JevAi final : public NoneAi {
     bool TouchesBase(ResourceID unit_type, Point site) const;
     bool FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const;
     bool ReleaseFinishedUnit();
+    void BalanceEconomy();
     UnitInfo* FindIdleFactory() const;
     void AddMoveOptions(UnitInfo* unit);
     void AddBuildOptions(UnitInfo* builder);

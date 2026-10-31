@@ -214,9 +214,13 @@ bool JevAi::TouchesBase(ResourceID unit_type, Point site) const {
 
             (*it).GetBounds(&bounds);
 
-            // the rectangles touch or overlap when grown by one cell
-            if (site.x <= bounds.lrx && site.x + size >= bounds.ulx && site.y <= bounds.lry &&
-                site.y + size >= bounds.uly) {
+            // buildings connect along an edge, touching corners do not connect
+            const bool overlaps_x = site.x < bounds.lrx && site.x + size > bounds.ulx;
+            const bool overlaps_y = site.y < bounds.lry && site.y + size > bounds.uly;
+            const bool touches_x = site.x + size == bounds.ulx || site.x == bounds.lrx;
+            const bool touches_y = site.y + size == bounds.uly || site.y == bounds.lry;
+
+            if ((touches_x && overlaps_y) || (touches_y && overlaps_x)) {
                 return true;
             }
         }
@@ -342,13 +346,98 @@ bool JevAi::ReleaseFinishedUnit() {
     return false;
 }
 
+void JevAi::BalanceEconomy() {
+    // what a human does in the allocation menu: mine enough fuel for every power generator, then raw materials,
+    // then gold, and switch on the generators the fuel can run
+    std::vector<Complex*> complexes;
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team == m_team && (*it).hits > 0 && (*it).GetComplex() &&
+            std::find(complexes.begin(), complexes.end(), (*it).GetComplex()) == complexes.end()) {
+            complexes.push_back((*it).GetComplex());
+        }
+    }
+
+    const int32_t generator_fuel = Cargo_GetFuelConsumptionRate(POWGEN);
+
+    for (Complex* complex : complexes) {
+        int32_t generators = 0;
+
+        for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+             ++it) {
+            if ((*it).GetComplex() == complex && (*it).GetUnitType() == POWGEN && (*it).hits > 0 &&
+                (*it).GetOrder() != ORDER_IDLE) {
+                ++generators;
+            }
+        }
+
+        int32_t fuel_needed = generators * generator_fuel;
+        int32_t fuel_mined = 0;
+
+        for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+             ++it) {
+            UnitInfo& station = *it;
+
+            if (station.GetComplex() != complex || station.GetUnitType() != MININGST || station.hits == 0 ||
+                station.GetOrder() != ORDER_POWER_ON) {
+                continue;
+            }
+
+            int32_t capacity = 16;
+
+            station.fuel_mining = std::min<int32_t>({station.fuel_mining_max, std::max(0, fuel_needed), capacity});
+            capacity -= station.fuel_mining;
+            fuel_needed -= station.fuel_mining;
+            station.raw_mining = std::min<int32_t>(station.raw_mining_max, capacity);
+            capacity -= station.raw_mining;
+            station.gold_mining = std::min<int32_t>(station.gold_mining_max, capacity);
+            capacity -= station.gold_mining;
+
+            // spare capacity goes to more fuel
+            const int32_t extra_fuel = std::min<int32_t>(station.fuel_mining_max - station.fuel_mining, capacity);
+
+            station.fuel_mining += extra_fuel;
+            station.total_mining = station.raw_mining + station.fuel_mining + station.gold_mining;
+            fuel_mined += station.fuel_mining;
+        }
+
+        Access_UpdateResourcesTotal(complex);
+
+        int32_t generators_on = 0;
+
+        for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+             ++it) {
+            if ((*it).GetComplex() == complex && (*it).GetUnitType() == POWGEN && (*it).hits > 0 &&
+                (*it).GetOrder() == ORDER_POWER_ON) {
+                ++generators_on;
+            }
+        }
+
+        for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+             ++it) {
+            if ((*it).GetComplex() == complex && (*it).GetUnitType() == POWGEN && (*it).hits > 0 &&
+                (*it).GetOrder() == ORDER_POWER_OFF && fuel_mined >= (generators_on + 1) * generator_fuel) {
+                UnitsManager_SetNewOrder(it->Get(), ORDER_POWER_ON, ORDER_STATE_INIT);
+
+                ++generators_on;
+            }
+        }
+    }
+}
+
 UnitInfo* JevAi::FindIdleFactory() const {
     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
          ++it) {
         UnitInfo& unit = *it;
 
-        if (unit.team == m_team && unit.hits > 0 && JevAi_IsFactory(unit.GetUnitType()) &&
-            unit.GetOrder() != ORDER_BUILD && unit.GetOrder() != ORDER_ACTIVATE && unit.GetOrder() != ORDER_IDLE &&
+        // a factory that is still expanding after construction is not connected to the base yet
+        const auto order = unit.GetOrder();
+        const bool is_settled = (order == ORDER_AWAIT || order == ORDER_POWER_ON || order == ORDER_POWER_OFF ||
+                                 order == ORDER_HALT_BUILDING || order == ORDER_HALT_BUILDING_2) &&
+                                unit.GetOrderState() == ORDER_STATE_EXECUTING_ORDER;
+
+        if (unit.team == m_team && unit.hits > 0 && JevAi_IsFactory(unit.GetUnitType()) && is_settled &&
             std::find(m_handled.begin(), m_handled.end(), SmartPointer<UnitInfo>(&unit)) == m_handled.end()) {
             return &unit;
         }
@@ -759,6 +848,7 @@ void JevAi::Apply(const std::string& answer) {
         } break;
 
         case Action::PRODUCE: {
+            BalanceEconomy();
             StartBuilding(&*m_unit, option->unit_type, Point(0, 0));
 
             m_wait_start = SDL_GetTicks();
@@ -856,6 +946,8 @@ void JevAi::BeginTurn() {
         }
     }
 
+    BalanceEconomy();
+
     std::string buildings;
     Complex* complex = nullptr;
 
@@ -863,7 +955,9 @@ void JevAi::BeginTurn() {
          ++it) {
         if ((*it).team == m_team && (*it).GetUnitType() != CNCT_4W && (*it).GetUnitType() != ROAD) {
             buildings += " " + JevAi_GetUnitName(it->Get()) + " (" + UnitsManager_Orders[(*it).GetOrder()] + " " +
-                         std::to_string((*it).GetOrderState()) + ")";
+                         std::to_string((*it).GetOrderState()) + " at " +
+                         JevAi_FormatPoint(Point((*it).grid_x, (*it).grid_y)) + " complex " +
+                         std::to_string((*it).GetComplex() ? (*it).GetComplex()->GetId() : -1) + ")";
 
             if ((*it).GetUnitType() == MININGST) {
                 buildings += "[mining raw " + std::to_string((*it).raw_mining) + "/" +
@@ -936,8 +1030,11 @@ bool JevAi::CheckEndTurn() {
                     ProductionManager_OptimizeProduction(m_team, m_unit->GetComplex(), &*m_unit, false);
                 }
 
-                SDL_Log("Jev %s: %s is %s.", GetTeamName(), JevAi_GetUnitName(&*m_unit).c_str(),
-                        UnitsManager_Orders[m_unit->GetOrder()]);
+                SDL_Log("Jev %s: %s is %s, base balance raw %d fuel %d power %d.", GetTeamName(),
+                        JevAi_GetUnitName(&*m_unit).c_str(), UnitsManager_Orders[m_unit->GetOrder()],
+                        m_unit->GetComplex() ? m_unit->GetComplex()->material : 0,
+                        m_unit->GetComplex() ? m_unit->GetComplex()->fuel : 0,
+                        m_unit->GetComplex() ? m_unit->GetComplex()->power : 0);
 
                 FinishUnit();
 
