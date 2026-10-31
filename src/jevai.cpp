@@ -32,6 +32,7 @@
 #include "cargo.hpp"
 #include "game_manager.hpp"
 #include "path.hpp"
+#include "production_manager.hpp"
 #include "remote.hpp"
 #include "resource_manager.hpp"
 #include "survey.hpp"
@@ -323,6 +324,7 @@ bool JevAi::ReleaseFinishedUnit() {
                         }
 
                         m_unit = &unit;
+                        m_last_action = Action::STAY;
                         m_move_start = Point(unit.grid_x, unit.grid_y);
                         m_wait_start = SDL_GetTicks();
                         m_state = State::WAIT_FOR_UNIT;
@@ -414,8 +416,8 @@ void JevAi::AddMoveOptions(UnitInfo* unit) {
                          std::to_string(gold);
             }
 
-            m_options.push_back({"m" + std::to_string(m_options.size()), Action::MOVE, destination, INVALID_ID, facts,
-                                 revealed - danger * 10});
+            m_options.push_back({"m" + std::to_string(m_options.size()), Action::MOVE, destination, INVALID_ID, nullptr,
+                                 facts, revealed - danger * 10});
         }
     }
 }
@@ -468,6 +470,14 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             } else if (unit_type == POWGEN) {
                 score = 20;
             }
+
+            if (unit_type == POWGEN) {
+                facts += ", burns " + std::to_string(Cargo_GetFuelConsumptionRate(POWGEN)) + " fuel per turn for " +
+                         std::to_string(-Cargo_GetPowerConsumptionRate(POWGEN)) + " power";
+
+            } else if (Cargo_GetPowerConsumptionRate(unit_type) > 0) {
+                facts += ", needs " + std::to_string(Cargo_GetPowerConsumptionRate(unit_type)) + " power";
+            }
         }
 
         if (cost > builder->storage) {
@@ -482,7 +492,8 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             }
         }
 
-        m_options.push_back({"b" + std::to_string(m_options.size()), Action::BUILD, site, unit_type, facts, score});
+        m_options.push_back(
+            {"b" + std::to_string(m_options.size()), Action::BUILD, site, unit_type, nullptr, facts, score});
     }
 }
 
@@ -509,13 +520,66 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
         }
 
         m_options.push_back(
-            {"p" + std::to_string(m_options.size()), Action::PRODUCE, Point(), unit_type, facts, score});
+            {"p" + std::to_string(m_options.size()), Action::PRODUCE, Point(), unit_type, nullptr, facts, score});
     }
 
-    m_options.push_back({"nothing", Action::STAY, Point(), INVALID_ID,
+    m_options.push_back({"nothing", Action::STAY, Point(), INVALID_ID, nullptr,
                          "produce nothing this turn; the base has " + std::to_string(materials.raw) + " of " +
                              std::to_string(capacity.raw) + " raw materials stored",
                          0});
+}
+
+void JevAi::AddAttackOptions(UnitInfo* unit) {
+    UnitValues* values = unit->GetBaseValues();
+
+    if (values->GetAttribute(ATTRIB_ATTACK) == 0 || unit->ammo == 0 || unit->shots == 0) {
+        return;
+    }
+
+    const int32_t reach = values->GetAttribute(ATTRIB_RANGE) + unit->speed;
+
+    for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_MobileAirUnits, &UnitsManager_StationaryUnits}) {
+        for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
+            UnitInfo& target = *it;
+
+            if (target.team == m_team || target.hits == 0 || !target.IsVisibleToTeam(m_team) ||
+                target.GetUnitType() == CNCT_4W || target.GetUnitType() == ROAD ||
+                !Access_IsValidAttackTarget(unit, &target)) {
+                continue;
+            }
+
+            const int32_t distance = Access_GetSquaredDistance(unit, &target);
+
+            if (distance > reach * reach) {
+                continue;
+            }
+
+            UnitValues* target_values = target.GetBaseValues();
+            const int32_t damage =
+                std::max(1, values->GetAttribute(ATTRIB_ATTACK) - target_values->GetAttribute(ATTRIB_ARMOR));
+            const bool shoots_back = target_values->GetAttribute(ATTRIB_ATTACK) > 0 &&
+                                     Access_IsValidAttackTargetType(target.GetUnitType(), unit->GetUnitType());
+            const bool in_range = distance <= values->GetAttribute(ATTRIB_RANGE) * values->GetAttribute(ATTRIB_RANGE);
+            std::string facts =
+                "attack the enemy " + JevAi_GetUnitName(&target) + " at " +
+                JevAi_FormatPoint(Point(target.grid_x, target.grid_y)) + ": it has " + std::to_string(target.hits) +
+                " of " + std::to_string(target_values->GetAttribute(ATTRIB_HITS)) + " hits, each shot does about " +
+                std::to_string(damage) + " damage, you have " + std::to_string(unit->shots) + " shots this turn";
+
+            facts += in_range ? ", in range now" : ", you move closer first";
+            facts += shoots_back ? ", it can shoot back with attack " +
+                                       std::to_string(target_values->GetAttribute(ATTRIB_ATTACK))
+                                 : ", it cannot shoot back";
+
+            if (target.hits <= damage * unit->shots) {
+                facts += ", it can be destroyed this turn";
+            }
+
+            m_options.push_back({"a" + std::to_string(m_options.size()), Action::ATTACK,
+                                 Point(target.grid_x, target.grid_y), INVALID_ID, SmartPointer<UnitInfo>(&target),
+                                 facts, 50 + damage * 5 - (shoots_back ? 10 : 0)});
+        }
+    }
 }
 
 json JevAi::GetState(UnitInfo* unit) const {
@@ -570,6 +634,12 @@ json JevAi::GetState(UnitInfo* unit) const {
 
             (*it).GetComplex()->GetCargoInfo(materials, capacity);
 
+            Cargo mining;
+            Cargo mining_capacity;
+
+            (*it).GetComplex()->GetCargoMining(mining, mining_capacity);
+
+            state["mining_per_turn"] = {{"raw", mining.raw}, {"fuel", mining.fuel}, {"gold", mining.gold}};
             state["base"] = {{"raw", materials.raw},
                              {"raw_capacity", capacity.raw},
                              {"fuel", materials.fuel},
@@ -620,7 +690,15 @@ void JevAi::StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site) {
     build_list.Clear();
     build_list.PushBack(&unit_type);
 
-    builder->SetBuildRate(1);
+    // the classic rule: a builder with a full cargo builds at double speed
+    if (!(builder->flags & STATIONARY) &&
+        builder->storage >= builder->GetBaseValues()->GetAttribute(ATTRIB_STORAGE) - 2) {
+        builder->SetBuildRate(2);
+
+    } else {
+        builder->SetBuildRate(1);
+    }
+
     builder->move_to_grid_x = site.x;
     builder->move_to_grid_y = site.y;
     builder->path = nullptr;
@@ -673,6 +751,8 @@ void JevAi::Apply(const std::string& answer) {
             JevAi_GetUnitName(&*m_unit).c_str(), JevAi_FormatPoint(Point(m_unit->grid_x, m_unit->grid_y)).c_str(),
             option->key.c_str(), option->facts.c_str(), model.c_str(), confidence);
 
+    m_last_action = option->action;
+
     switch (option->action) {
         case Action::STAY: {
             FinishUnit();
@@ -680,7 +760,9 @@ void JevAi::Apply(const std::string& answer) {
 
         case Action::PRODUCE: {
             StartBuilding(&*m_unit, option->unit_type, Point(0, 0));
-            FinishUnit();
+
+            m_wait_start = SDL_GetTicks();
+            m_state = State::WAIT_FOR_UNIT;
         } break;
 
         case Action::BUILD: {
@@ -703,6 +785,20 @@ void JevAi::Apply(const std::string& answer) {
                 m_wait_start = SDL_GetTicks();
                 m_state = State::WAIT_FOR_UNIT;
             }
+        } break;
+
+        case Action::ATTACK: {
+            m_move_start = Point(m_unit->grid_x, m_unit->grid_y);
+
+            // same order as the classic AiAttack_EvaluateAttack and the human attack click
+            m_unit->SetEnemy(&*option->target);
+            m_unit->path = nullptr;
+
+            UnitsManager_SetNewOrder(&*m_unit, ORDER_MOVE_TO_ATTACK, ORDER_STATE_EXECUTING_ORDER);
+
+            ++m_turn_attacks;
+            m_wait_start = SDL_GetTicks();
+            m_state = State::WAIT_FOR_UNIT;
         } break;
 
         case Action::MOVE: {
@@ -750,6 +846,7 @@ void JevAi::BeginTurn() {
     m_turn_moves = 0;
     m_turn_failed_moves = 0;
     m_turn_builds = 0;
+    m_turn_attacks = 0;
     m_state = State::SELECT;
 
     for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
@@ -759,7 +856,40 @@ void JevAi::BeginTurn() {
         }
     }
 
-    SDL_Log("Jev %s: turn %d, %d units.", GetTeamName(), GameManager_TurnCounter, static_cast<int32_t>(m_units.size()));
+    std::string buildings;
+    Complex* complex = nullptr;
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team == m_team && (*it).GetUnitType() != CNCT_4W && (*it).GetUnitType() != ROAD) {
+            buildings += " " + JevAi_GetUnitName(it->Get()) + " (" + UnitsManager_Orders[(*it).GetOrder()] + " " +
+                         std::to_string((*it).GetOrderState()) + ")";
+
+            if ((*it).GetUnitType() == MININGST) {
+                buildings += "[mining raw " + std::to_string((*it).raw_mining) + "/" +
+                             std::to_string((*it).raw_mining_max) + " fuel " + std::to_string((*it).fuel_mining) + "/" +
+                             std::to_string((*it).fuel_mining_max) + " gold " + std::to_string((*it).gold_mining) +
+                             "/" + std::to_string((*it).gold_mining_max) + "]";
+            }
+
+            if (!complex) {
+                complex = (*it).GetComplex();
+            }
+        }
+    }
+
+    if (complex) {
+        Cargo materials;
+        Cargo capacity;
+
+        complex->GetCargoInfo(materials, capacity);
+
+        buildings += "; base raw " + std::to_string(materials.raw) + " fuel " + std::to_string(materials.fuel) +
+                     " gold " + std::to_string(materials.gold) + " power left " + std::to_string(complex->power);
+    }
+
+    SDL_Log("Jev %s: turn %d, %d units, buildings:%s", GetTeamName(), GameManager_TurnCounter,
+            static_cast<int32_t>(m_units.size()), buildings.c_str());
 }
 
 bool JevAi::CheckEndTurn() {
@@ -790,6 +920,25 @@ bool JevAi::CheckEndTurn() {
 
         case State::WAIT_FOR_UNIT: {
             if (!m_unit || m_unit->hits == 0) {
+                FinishUnit();
+
+                return false;
+            }
+
+            if (m_last_action == Action::PRODUCE) {
+                if (m_unit->GetOrder() == ORDER_BUILD && m_unit->GetOrderState() == ORDER_STATE_INIT &&
+                    SDL_GetTicks() - m_wait_start < JevAi_UnitTimeout) {
+                    return false;
+                }
+
+                // as for a human player: rebalance mining and power so that the new production keeps running
+                if (m_unit->GetComplex()) {
+                    ProductionManager_OptimizeProduction(m_team, m_unit->GetComplex(), &*m_unit, false);
+                }
+
+                SDL_Log("Jev %s: %s is %s.", GetTeamName(), JevAi_GetUnitName(&*m_unit).c_str(),
+                        UnitsManager_Orders[m_unit->GetOrder()]);
+
                 FinishUnit();
 
                 return false;
@@ -831,7 +980,7 @@ bool JevAi::CheckEndTurn() {
                 return false;
             }
 
-            if (Point(m_unit->grid_x, m_unit->grid_y) == m_move_start) {
+            if (m_last_action == Action::MOVE && Point(m_unit->grid_x, m_unit->grid_y) == m_move_start) {
                 ++m_turn_failed_moves;
 
                 SDL_Log("Jev %s: %s did not move.", GetTeamName(), JevAi_GetUnitName(&*m_unit).c_str());
@@ -900,9 +1049,9 @@ bool JevAi::CheckEndTurn() {
 
                     SDL_Log(
                         "Jev %s: turn %d done: %d questions, %d moves, %d did not move, %d builds started, %d "
-                        "cells explored, %d units lost.",
+                        "attacks, %d cells explored, %d units lost.",
                         GetTeamName(), GameManager_TurnCounter, m_turn_questions, m_turn_moves, m_turn_failed_moves,
-                        m_turn_builds, m_explored_cells, m_units_lost);
+                        m_turn_builds, m_turn_attacks, m_explored_cells, m_units_lost);
                 }
 
                 return AiController_EndTurn(m_team);
@@ -911,13 +1060,14 @@ bool JevAi::CheckEndTurn() {
             const int32_t danger_here = GetDanger(&*m_unit, Point(m_unit->grid_x, m_unit->grid_y), nullptr);
 
             m_options.clear();
+            AddAttackOptions(&*m_unit);
             AddMoveOptions(&*m_unit);
 
             if (JevAi_IsBuilder(m_unit->GetUnitType())) {
                 AddBuildOptions(&*m_unit);
             }
 
-            m_options.push_back({"stay", Action::STAY, Point(m_unit->grid_x, m_unit->grid_y), INVALID_ID,
+            m_options.push_back({"stay", Action::STAY, Point(m_unit->grid_x, m_unit->grid_y), INVALID_ID, nullptr,
                                  "stay where it is for the rest of this turn, danger " + std::to_string(danger_here),
                                  -danger_here * 10});
             m_question = "action";

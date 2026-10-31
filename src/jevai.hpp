@@ -41,13 +41,14 @@
 class JevAi final : public NoneAi {
     enum class State { SELECT, WAIT_FOR_ANSWER, WAIT_FOR_UNIT };
 
-    enum class Action { STAY, MOVE, BUILD, PRODUCE };
+    enum class Action { STAY, MOVE, BUILD, PRODUCE, ATTACK };
 
     struct Option {
         std::string key;
         Action action;
         Point destination;
         ResourceID unit_type;
+        SmartPointer<UnitInfo> target;
         std::string facts;
         int32_t score;
     };
@@ -68,6 +69,8 @@ class JevAi final : public NoneAi {
     int32_t m_turn_moves{0};
     int32_t m_turn_failed_moves{0};
     int32_t m_turn_builds{0};
+    int32_t m_turn_attacks{0};
+    Action m_last_action{Action::STAY};
     int32_t m_units_lost{0};
     int32_t m_explored_cells{0};
     int32_t m_last_turn{0};
@@ -87,6 +90,7 @@ class JevAi final : public NoneAi {
     void AddMoveOptions(UnitInfo* unit);
     void AddBuildOptions(UnitInfo* builder);
     void AddProduceOptions(UnitInfo* factory);
+    void AddAttackOptions(UnitInfo* unit);
     nlohmann::ordered_json GetState(UnitInfo* unit) const;
     bool Ask(UnitInfo* unit, const char* instructions);
     void Apply(const std::string& answer);
