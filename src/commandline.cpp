@@ -244,6 +244,14 @@ int32_t CommandLine_Parse(int argc, char* argv[]) {
 
 bool CommandLine_IsGame() { return CommandLine_Values.is_game; }
 
+static SDL_AssertState SDLCALL CommandLine_AssertionHandler(const SDL_AssertData* data, void* userdata) {
+    // nobody can answer a dialog in a hidden game
+    SDL_Log("Command line: assertion failed at %s (%s:%d): %s", data->function, data->filename, data->linenum,
+            data->condition);
+
+    return SDL_ASSERTION_ALWAYS_IGNORE;
+}
+
 void CommandLine_RunGame() {
     auto& options = CommandLine_Values;
     const auto settings = ResourceManager_GetSettings();
@@ -261,6 +269,8 @@ void CommandLine_RunGame() {
 
             SDL_free(windows);
         }
+
+        SDL_SetAssertionHandler(CommandLine_AssertionHandler, nullptr);
 
         settings->SetNumericValue("disable_music", 1);
         settings->SetNumericValue("disable_fx", 1);
