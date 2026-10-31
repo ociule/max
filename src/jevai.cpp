@@ -280,6 +280,15 @@ void JevAi::FinishUnit() {
 }
 
 void JevAi::BeginTurn() {
+    // a new game; the controllers outlive games
+    if (GameManager_TurnCounter <= m_last_turn) {
+        m_explored.clear();
+        m_explored_cells = 0;
+        m_units_lost = 0;
+    }
+
+    m_last_turn = GameManager_TurnCounter;
+    m_turn_done_logged = false;
     m_units.clear();
     m_unit = nullptr;
     m_unit_picks = 0;
@@ -374,11 +383,15 @@ bool JevAi::CheckEndTurn() {
                     return false;
                 }
 
-                SDL_Log(
-                    "Jev %s: turn %d done: %d questions, %d moves, %d did not move, %d cells explored, %d units "
-                    "lost.",
-                    GetTeamName(), GameManager_TurnCounter, m_turn_questions, m_turn_moves, m_turn_failed_moves,
-                    m_explored_cells, m_units_lost);
+                if (!m_turn_done_logged) {
+                    m_turn_done_logged = true;
+
+                    SDL_Log(
+                        "Jev %s: turn %d done: %d questions, %d moves, %d did not move, %d cells explored, %d "
+                        "units lost.",
+                        GetTeamName(), GameManager_TurnCounter, m_turn_questions, m_turn_moves, m_turn_failed_moves,
+                        m_explored_cells, m_units_lost);
+                }
 
                 return AiController_EndTurn(m_team);
             }
