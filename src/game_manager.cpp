@@ -45,6 +45,7 @@
 #include "missionmanager.hpp"
 #include "mouseevent.hpp"
 #include "movie.hpp"
+#include "order_log.hpp"
 #include "paths.hpp"
 #include "paths_manager.hpp"
 #include "production_manager.hpp"
@@ -223,6 +224,11 @@ uint8_t GameManager_PlayMode;
 bool GameManager_FastMovement;
 uint16_t GameManager_MultiChatTargets[PLAYER_TEAM_MAX - 1];
 
+#if !defined(NDEBUG)
+static bool GameManager_TimerMode{true};
+static uint64_t GameManager_TimerModeRenderTimeStamp;
+#endif /* !defined(NDEBUG) */
+
 uint32_t GameManager_LastZoomLevel;
 
 static Point GameManager_GridOffset;
@@ -310,7 +316,6 @@ static bool GameManager_DebugDelayedEndTurn(SmartList<UnitInfo>& units);
 static void GameManager_ProcessKey();
 static int32_t GameManager_GetBuilderUnitCursor(UnitInfo* unit1, int32_t grid_x, int32_t grid_y, UnitInfo* unit2);
 static int32_t GameManager_GetAirUnitCursor(UnitInfo* unit1, int32_t grid_x, int32_t grid_y, UnitInfo* unit2);
-static bool GameManager_IsUnitNotInAir(UnitInfo* unit);
 static UnitInfo* GameManager_GetUnitWithCargoType(Complex* complex, int32_t cargo_type);
 static int32_t GameManager_GetUnitActionCursor(UnitInfo* unit1, int32_t grid_x, int32_t grid_y, UnitInfo* unit2);
 static bool GameManager_IsValidTransferTarget(UnitInfo* unit1, UnitInfo* unit2);
@@ -416,6 +421,11 @@ static void GameManager_DrawInfoDisplayType2(UnitInfo* unit);
 static void GameManager_DrawInfoDisplayType1(UnitInfo* unit);
 static void GameManager_DrawInfoDisplayType3(UnitInfo* unit);
 static bool GameManager_SyncTurnTimer();
+static bool GameManager_IsTickDue();
+static bool GameManager_IsTickRenderDue();
+#if !defined(NDEBUG)
+static void GameManager_ToggleTimerMode();
+#endif /* !defined(NDEBUG) */
 static void GameManager_MenuCreateFlic(ResourceID unit_type, int32_t ulx, int32_t uly);
 static void GameManager_DrawFlic(Rect* bounds);
 static void GameManager_AdvanceFlic();
@@ -1861,7 +1871,6 @@ void GameManager_GameSetup(int32_t game_state) {
     Ai_Init();
 
     ResourceManager_GetPathsManager().Clear();
-    Paths_ClearSiteReservations();
 
     if (game_state == GAME_STATE_6_GAME_SETUP) {
         const auto mission_category = ResourceManager_GetMissionManager()->GetMission()->GetCategory();
@@ -1952,7 +1961,7 @@ void GameManager_GameSetup(int32_t game_state) {
 
     GameManager_GameState = GAME_STATE_8_IN_GAME;
 
-    Access_UpdateVisibilityStatus(GameManager_AllVisible);
+    Access_UpdateVisibilityStatus(GameManager_AllVisible, game_state == GAME_STATE_6_GAME_SETUP);
 
     ResourceManager_GetSoundManager().PlayMusic(
         static_cast<ResourceID>(ResourceManager_GetSettings()->GetNumericValue("world") / 6 + SNOW_MSC), true);
@@ -1966,9 +1975,20 @@ void GameManager_GameSetup(int32_t game_state) {
     mouse_hide();
     mouse_set_position(WindowManager_GetWidth(window) / 2, WindowManager_GetHeight(window) / 2);
     mouse_show();
+
+#if !defined(NDEBUG)
+    if (const World* world = ResourceManager_GetActiveWorld()) {
+        AILOG(log, "Game start on world {}, {}x{} map.", ResourceManager_GetResourceID(world->GetResourceId()),
+              world->GetMapSize().x, world->GetMapSize().y);
+    }
+#endif /* !defined(NDEBUG) */
+
+    ORDER_LOG_GAME_START();
 }
 
 void GameManager_GameLoopCleanup() {
+    ORDER_LOG_GAME_END();
+
     Remote_UpdatePauseTimer = false;
     GameManager_RequestMenuExit = false;
     GameManager_TurnTimerValue = 0;
@@ -2999,6 +3019,10 @@ void GameManager_InitUnitsAndGameState() {
     GameManager_PlayMode = ResourceManager_GetSettings()->GetNumericValue("play_mode");
     GameManager_FastMovement = ResourceManager_GetSettings()->GetNumericValue("fast_movement");
 
+#if !defined(NDEBUG)
+    GameManager_TimerMode = ResourceManager_GetSettings()->GetNumericValue("timer_mode");
+#endif /* !defined(NDEBUG) */
+
     GameManager_ArrowKeyFlags = 0;
 
     GameManager_TurnCounter = 1;
@@ -3289,10 +3313,11 @@ bool GameManager_LoadGame(int32_t save_slot, Color* palette_buffer) {
 
     load_successful = false;
 
-    GameManager_MaxSpy = false;
-    GameManager_MaxSurvey = false;
-
     if (save_slot) {
+        // cheats active in the game left behind do not carry over into the loaded one
+        GameManager_MaxSpy = false;
+        GameManager_MaxSurvey = false;
+
         if (GameManager_SelectedUnit != nullptr) {
             ResourceManager_GetSoundManager().PlaySfx(&*GameManager_SelectedUnit, Unit::SFX_TYPE_INVALID);
         }
@@ -3314,7 +3339,6 @@ bool GameManager_LoadGame(int32_t save_slot, Color* palette_buffer) {
         Ai_Init();
 
         ResourceManager_GetPathsManager().Clear();
-        Paths_ClearSiteReservations();
 
         GameManager_LockedUnits.Clear();
 
@@ -5066,6 +5090,47 @@ void GameManager_ProcessState(bool process_tick, bool clear_mouse_events) {
     }
 }
 
+bool GameManager_IsTickDue() {
+    if (!TickTimer_HaveTimeToThink(TIMER_FPS_TO_MS(24))) {
+        return true;
+    }
+
+#if !defined(NDEBUG)
+    if (!GameManager_TimerMode && !Remote_IsNetworkGame && !ResourceManager_GetPathsManager().HasDispatchedJobs()) {
+        return true;
+    }
+#endif /* !defined(NDEBUG) */
+
+    return false;
+}
+
+bool GameManager_IsTickRenderDue() {
+#if !defined(NDEBUG)
+    if (!GameManager_TimerMode && !Remote_IsNetworkGame) {
+        const uint64_t time_stamp = timer_get();
+
+        if (time_stamp - GameManager_TimerModeRenderTimeStamp < TIMER_FPS_TO_MS(Svga_GetScreenRefreshRate())) {
+            return false;
+        }
+
+        GameManager_TimerModeRenderTimeStamp = time_stamp;
+    }
+#endif /* !defined(NDEBUG) */
+
+    return true;
+}
+
+#if !defined(NDEBUG)
+void GameManager_ToggleTimerMode() {
+    if (!Remote_IsNetworkGame) {
+        GameManager_TimerMode = !GameManager_TimerMode;
+
+        MessageManager_DrawMessage(GameManager_TimerMode ? "Timer mode now ON." : "Timer mode now OFF.",
+                                   MESSAGE_BOX_INFO, MESSAGE_BOX_MODELESS);
+    }
+}
+#endif /* !defined(NDEBUG) */
+
 bool GameManager_ProcessTick(bool render_screen) {
     uint64_t time_stamp;
     bool result;
@@ -5091,7 +5156,7 @@ bool GameManager_ProcessTick(bool render_screen) {
     // Always poll path results regardless of frame budget
     ResourceManager_GetPathsManager().PollResults();
 
-    if (!TickTimer_HaveTimeToThink(TIMER_FPS_TO_MS(24))) {
+    if (GameManager_IsTickDue()) {
         if (GameManager_IsCheater && GameManager_PlayMode != PLAY_MODE_UNKNOWN) {
             GameManager_PunishCheater();
         }
@@ -5107,7 +5172,9 @@ bool GameManager_ProcessTick(bool render_screen) {
             UnitsManager_ProcessOrders();
         }
 
-        GameManager_RenderMap();
+        if (GameManager_IsTickRenderDue()) {
+            GameManager_RenderMap();
+        }
 
         if (GameManager_GameState != GAME_STATE_11_TURN_ACTIVE && !UnitsManager_OrdersPending) {
             TickTimer_UpdateTimeLimit();
@@ -5518,6 +5585,12 @@ void GameManager_ProcessKey() {
 #endif /* !defined(NDEBUG) */
         } break;
 
+        case GNW_KB_KEY_LALT_T: {
+#if !defined(NDEBUG)
+            GameManager_ToggleTimerMode();
+#endif /* !defined(NDEBUG) */
+        } break;
+
         case GNW_KB_KEY_LALT_D: {
 #if !defined(NDEBUG)
             if (GameManager_SelectedUnit) {
@@ -5878,10 +5951,6 @@ int32_t GameManager_GetAirUnitCursor(UnitInfo* unit1, int32_t grid_x, int32_t gr
     return result;
 }
 
-bool GameManager_IsUnitNotInAir(UnitInfo* unit) {
-    return !(unit->flags & MOBILE_AIR_UNIT) || !(unit->flags & HOVERING);
-}
-
 UnitInfo* GameManager_GetUnitWithCargoType(Complex* complex, int32_t cargo_type) {
     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
          ++it) {
@@ -6039,14 +6108,7 @@ bool GameManager_IsValidTransferTarget(UnitInfo* unit1, UnitInfo* unit2) {
 bool GameManager_IsValidStealTarget(UnitInfo* unit1, UnitInfo* unit2) {
     bool result;
 
-    if ((unit2->flags & STATIONARY) || !(unit2->flags & ELECTRONIC_UNIT) || unit2->GetOrder() == ORDER_TRANSFORM ||
-        unit2->GetOrder() == ORDER_FIRE || unit2->GetOrder() == ORDER_EXPLODE ||
-        unit2->GetOrderState() == ORDER_STATE_DESTROY) {
-        result = false;
-
-    } else if ((unit2->GetUnitType() == CLNTRANS || unit2->GetUnitType() == SEATRANS ||
-                unit2->GetUnitType() == AIRTRANS) &&
-               unit2->storage) {
+    if (!UnitsManager_IsValidStealthTarget(unit1, unit2, ORDER_AWAIT_STEAL_UNIT)) {
         result = false;
 
     } else {
@@ -6062,9 +6124,7 @@ bool GameManager_IsValidStealTarget(UnitInfo* unit1, UnitInfo* unit2) {
 bool GameManager_IsValidDisableTarget(UnitInfo* unit1, UnitInfo* unit2) {
     bool result;
 
-    if (!(unit2->flags & ELECTRONIC_UNIT) || unit2->GetOrder() == ORDER_TRANSFORM || unit2->GetOrder() == ORDER_FIRE ||
-        unit2->GetOrder() == ORDER_EXPLODE || unit2->GetOrderState() == ORDER_STATE_DESTROY ||
-        unit2->GetOrder() == ORDER_DISABLE) {
+    if (!UnitsManager_IsValidStealthTarget(unit1, unit2, ORDER_AWAIT_DISABLE_UNIT)) {
         result = false;
 
     } else {
@@ -6099,8 +6159,7 @@ int32_t GameManager_GetMilitaryCursor(UnitInfo* unit, int32_t grid_x, int32_t gr
 
         if (target) {
             if (GameManager_SelectedUnit->GetUnitType() == COMMANDO && GameManager_SelectedUnit->targeting_mode == 0) {
-                if (GameManager_IsUnitNextToPosition(GameManager_SelectedUnit.Get(), grid_x, grid_y) &&
-                    GameManager_IsUnitNotInAir(target)) {
+                if (GameManager_IsUnitNextToPosition(GameManager_SelectedUnit.Get(), grid_x, grid_y)) {
                     if (GameManager_SelectedUnit->cursor == CURSOR_ARROW_NW ||
                         GameManager_SelectedUnit->cursor == CURSOR_HIDDEN) {
                         if (GameManager_IsValidDisableTarget(GameManager_SelectedUnit.Get(), target)) {

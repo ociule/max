@@ -24,6 +24,8 @@
 #include "access.hpp"
 #include "ai.hpp"
 #include "aiattack.hpp"
+#include "ailog.hpp"
+#include "attack_census.hpp"
 #include "builder.hpp"
 #include "circumferencewalker.hpp"
 #include "complex.hpp"
@@ -192,21 +194,19 @@ Point AiPlayer::GetTeamClusterCoordinates(uint16_t team) {
 void AiPlayer::DetermineAttack(SpottedUnit* spotted_unit, uint16_t task_priority) {
     if (!spotted_unit->GetTask()) {
         if (task_priority > TASK_PRIORITY_ATTACK_MOBILE &&
-            UnitsManager_TeamInfo[spotted_unit->GetUnit()->team].team_points >
-                UnitsManager_TeamInfo[player_team].team_points &&
-            (spotted_unit->GetUnit()->GetUnitType() == GREENHSE ||
-             spotted_unit->GetUnit()->GetUnitType() == MININGST)) {
+            AiAttack_IsPriorityTarget(spotted_unit->GetUnit(), player_team)) {
             task_priority = TASK_PRIORITY_ATTACK_PRIORITY_TARGET;
         }
 
         uint16_t target_task_priority = AiAttack_GetTargetFlags(nullptr, spotted_unit->GetUnit(), player_team) +
                                         task_priority + TASK_PRIORITY_OFFSET_CENSUS_SLACK;
+        const int32_t task_limit = attack_tasks.size();
         int32_t task_index;
 
-        for (task_index = 0; task_index < AttackTaskLimit && attack_tasks[task_index]; ++task_index) {
+        for (task_index = 0; task_index < task_limit && attack_tasks[task_index]; ++task_index) {
         }
 
-        if (task_index == AttackTaskLimit) {
+        if (task_index == task_limit) {
             for (--task_index; task_index >= 0 && attack_tasks[task_index]->ComparePriority(target_task_priority) <= 0;
                  --task_index) {
             }
@@ -237,30 +237,55 @@ void AiPlayer::DetermineAttack(SpottedUnit* spotted_unit, uint16_t task_priority
     }
 }
 
-void AiPlayer::UpdatePriorityTasks() {
-    for (int32_t i = 0; i < AttackTaskLimit; ++i) {
-        attack_tasks[i] = nullptr;
+int32_t AiPlayer::GetAttackValueShare() const { return attack_value_share; }
+
+int32_t AiPlayer::GetMilitaryValue() const {
+    SmartList<UnitInfo>* const lists[] = {&UnitsManager_MobileLandSeaUnits, &UnitsManager_MobileAirUnits};
+    int32_t result = 0;
+
+    // armed mobile units by build cost, as the attack census counts them
+    for (auto units : lists) {
+        for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
+            if ((*it).team == player_team && (*it).hits > 0 && (*it).GetBaseValues()->GetAttribute(ATTRIB_ATTACK) > 0) {
+                result += (*it).GetNormalRateBuildCost();
+            }
+        }
     }
+
+    return result;
+}
+
+void AiPlayer::UpdatePriorityTasks() {
+    const int32_t military_value = GetMilitaryValue();
+    const int32_t task_limit =
+        std::clamp((military_value + AttackValue - 1) / AttackValue, AttackTaskLimitMin, AttackTaskLimitMax);
+
+    // an attack may draw twice its even share, as the slots are rarely all taken
+    attack_value_share = std::max(AttackValue, (2 * military_value) / task_limit);
+
+    AILOG(log, "Attack limit {} for military value {}, share {}.", task_limit, military_value, attack_value_share);
+
+    attack_tasks.assign(task_limit, nullptr);
 
     for (auto it = TaskManager.GetTaskList().Begin(), it_end = TaskManager.GetTaskList().End(); it != it_end; ++it) {
         if ((*it).GetTeam() == player_team && (*it).GetType() == TaskType_TaskAttack) {
             uint16_t task_priority = (*it).GetPriority();
             int32_t task_index;
 
-            for (task_index = 0; task_index < AttackTaskLimit && attack_tasks[task_index] &&
+            for (task_index = 0; task_index < task_limit && attack_tasks[task_index] &&
                                  attack_tasks[task_index]->ComparePriority(task_priority) <= 0;
                  ++task_index) {
             }
 
-            if (task_index == AttackTaskLimit) {
+            if (task_index == task_limit) {
                 (*it).RemoveSelf();
 
             } else {
-                if (attack_tasks[AttackTaskLimit - 1]) {
-                    attack_tasks[AttackTaskLimit - 1]->RemoveSelf();
+                if (attack_tasks[task_limit - 1]) {
+                    attack_tasks[task_limit - 1]->RemoveSelf();
                 }
 
-                for (int32_t i = AttackTaskLimit - 1; i > task_index; --i) {
+                for (int32_t i = task_limit - 1; i > task_index; --i) {
                     attack_tasks[i] = attack_tasks[i - 1];
                 }
 
@@ -616,92 +641,76 @@ void AiPlayer::DetermineDefenses(SmartList<UnitInfo>* units, int16_t** map) {
     }
 }
 
-void AiPlayer::DetermineThreats(UnitInfo* unit, Point position, int32_t caution_level, bool* teams,
-                                ThreatMap* air_force_map, ThreatMap* ground_forces_map) {
+void AiPlayer::DetermineThreats(UnitInfo* unit, Point position, int32_t caution_level, ThreatMap* air_force_map,
+                                ThreatMap* ground_forces_map) {
     if ((unit->flags & MOBILE_AIR_UNIT) && air_force_map->shots_map) {
         ground_forces_map = air_force_map;
     }
 
-    if (!(unit->speed > 0 && !teams[unit->team])) {
-        UnitValues* base_values = unit->GetBaseValues();
-        int32_t unit_range = base_values->GetAttribute(ATTRIB_RANGE);
-        int32_t attack_range = unit_range + base_values->GetAttribute(ATTRIB_ATTACK_RADIUS);
-        int32_t unit_attack = base_values->GetAttribute(ATTRIB_ATTACK);
-        int32_t unit_shots = base_values->GetAttribute(ATTRIB_ROUNDS);
-        int32_t unit_ammo = unit->ammo;
-        int32_t unit_speed = base_values->GetAttribute(ATTRIB_SPEED);
+    UnitValues* base_values = unit->GetBaseValues();
+    int32_t unit_range = base_values->GetAttribute(ATTRIB_RANGE);
+    int32_t attack_range = unit_range + base_values->GetAttribute(ATTRIB_ATTACK_RADIUS);
+    int32_t unit_attack = base_values->GetAttribute(ATTRIB_ATTACK);
+    int32_t unit_shots = base_values->GetAttribute(ATTRIB_ROUNDS);
+    int32_t unit_ammo = unit->ammo;
+    int32_t unit_speed = base_values->GetAttribute(ATTRIB_SPEED);
 
-        switch (caution_level) {
-            case CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE: {
-                if (base_values->GetAttribute(ATTRIB_MOVE_AND_FIRE)) {
-                    UpdateThreatMaps(ground_forces_map, unit, position, unit_range, unit_attack, unit->shots, unit_ammo,
-                                     true);
-
-                    int32_t movement_range = 0;
-
-                    if (teams[unit->team]) {
-                        movement_range = unit_speed / 2;
-
-                        UpdateThreatMaps(ground_forces_map, unit, position, attack_range + movement_range, unit_attack,
-                                         unit_shots, unit_ammo, false);
-
-                    } else {
-                        UpdateThreatMaps(ground_forces_map, unit, position, attack_range + movement_range, unit_attack,
-                                         unit_shots, unit_ammo, false);
-                    }
-
-                } else {
-                    UpdateThreatMaps(ground_forces_map, unit, position, unit_range, unit_attack, unit->shots + 1,
-                                     unit_ammo, true);
-
-                    if (teams[unit->team]) {
-                        for (;;) {
-                            --unit_shots;
-
-                            if (unit_shots <= 0) {
-                                break;
-                            }
-
-                            int32_t movement_range = ((unit_speed + 1) * unit_shots) / (unit_shots + 1);
-
-                            UpdateThreatMaps(ground_forces_map, unit, position, movement_range + attack_range,
-                                             unit_attack, 1, unit_ammo, false);
-                        }
-                    }
-                }
-            } break;
-
-            case CAUTION_LEVEL_AVOID_ALL_DAMAGE: {
-                UpdateThreatMaps(ground_forces_map, unit, position, attack_range, unit_attack, unit_shots, unit_ammo,
+    switch (caution_level) {
+        case CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE: {
+            if (base_values->GetAttribute(ATTRIB_MOVE_AND_FIRE)) {
+                UpdateThreatMaps(ground_forces_map, unit, position, unit_range, unit_attack, unit->shots, unit_ammo,
                                  true);
 
-                if (teams[unit->team]) {
-                    int32_t movement_range = 0;
+                int32_t movement_range = unit_speed / 2;
 
-                    if (base_values->GetAttribute(ATTRIB_MOVE_AND_FIRE)) {
-                        movement_range = unit_speed / 2;
+                UpdateThreatMaps(ground_forces_map, unit, position, attack_range + movement_range, unit_attack,
+                                 unit_shots, unit_ammo, false);
 
-                    } else {
-                        movement_range = ((unit_speed + 1) * (unit_shots - 1)) / (unit_shots);
+            } else {
+                UpdateThreatMaps(ground_forces_map, unit, position, unit_range, unit_attack, unit->shots + 1, unit_ammo,
+                                 true);
 
-                        if (GameManager_PlayMode != PLAY_MODE_TURN_BASED) {
-                            movement_range = std::max<int32_t>(movement_range, unit->speed);
-                        }
+                for (;;) {
+                    --unit_shots;
+
+                    if (unit_shots <= 0) {
+                        break;
                     }
 
-                    if (movement_range > 0) {
-                        UpdateThreatMaps(ground_forces_map, unit, position, movement_range + attack_range, unit_attack,
-                                         unit_shots, unit_ammo, false);
-                    }
+                    int32_t movement_range = ((unit_speed + 1) * unit_shots) / (unit_shots + 1);
+
+                    UpdateThreatMaps(ground_forces_map, unit, position, movement_range + attack_range, unit_attack, 1,
+                                     unit_ammo, false);
                 }
+            }
+        } break;
 
-            } break;
+        case CAUTION_LEVEL_AVOID_ALL_DAMAGE: {
+            UpdateThreatMaps(ground_forces_map, unit, position, attack_range, unit_attack, unit_shots, unit_ammo, true);
 
-            case CAUTION_LEVEL_AVOID_REACTION_FIRE: {
-                UpdateThreatMaps(ground_forces_map, unit, position, unit_range, unit_attack, unit->shots, unit_ammo,
-                                 false);
-            } break;
-        }
+            int32_t movement_range = 0;
+
+            if (base_values->GetAttribute(ATTRIB_MOVE_AND_FIRE)) {
+                movement_range = unit_speed / 2;
+
+            } else {
+                movement_range = ((unit_speed + 1) * (unit_shots - 1)) / (unit_shots);
+
+                if (GameManager_PlayMode != PLAY_MODE_TURN_BASED) {
+                    movement_range = std::max<int32_t>(movement_range, unit->speed);
+                }
+            }
+
+            if (movement_range > 0) {
+                UpdateThreatMaps(ground_forces_map, unit, position, movement_range + attack_range, unit_attack,
+                                 unit_shots, unit_ammo, false);
+            }
+
+        } break;
+
+        case CAUTION_LEVEL_AVOID_REACTION_FIRE: {
+            UpdateThreatMaps(ground_forces_map, unit, position, unit_range, unit_attack, unit->shots, unit_ammo, false);
+        } break;
     }
 }
 
@@ -802,9 +811,6 @@ ThreatMap* AiPlayer::GetThreatMap(int32_t risk_level, int32_t caution_level, boo
         ThreatMap air_force_threat_map;
         const ResourceID risk_group[] = {INVALID_ID, TANK, SURVEYOR, FIGHTER, COMMANDO, COMMANDO, SUBMARNE, CLNTRANS};
         ResourceID risk_group_unit = risk_group[risk_level];
-        bool teams[PLAYER_TEAM_MAX];
-
-        AiAttack_GetTargetTeams(player_team, teams);
 
         if (caution_level > CAUTION_LEVEL_AVOID_REACTION_FIRE) {
             air_force_threat_map.Init();
@@ -816,47 +822,18 @@ ThreatMap* AiPlayer::GetThreatMap(int32_t risk_level, int32_t caution_level, boo
         }
 
         if (is_for_attacking) {
-            if (ResourceManager_GetSettings()->GetNumericValue("opponent") >= OPPONENT_TYPE_MASTER &&
-                ResourceManager_GetSettings()->GetNumericValue("cheating_computer") >=
-                    COMPUTER_CHEATING_LEVEL_SHAMELESS) {
-                for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End();
-                     it != it_end; ++it) {
-                    if (IsAbleToAttack(it->Get(), risk_group_unit, player_team) && (*it).team != player_team) {
-                        DetermineThreats(it->Get(), Point((*it).grid_x, (*it).grid_y), caution_level, teams,
-                                         &air_force_threat_map, &AiPlayer_ThreatMaps[index]);
-                    }
-                }
-
-                for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
-                     it != it_end; ++it) {
-                    if (IsAbleToAttack(it->Get(), risk_group_unit, player_team) && (*it).team != player_team) {
-                        DetermineThreats(it->Get(), Point((*it).grid_x, (*it).grid_y), caution_level, teams,
-                                         &air_force_threat_map, &AiPlayer_ThreatMaps[index]);
-                    }
-                }
-
-                for (auto it = UnitsManager_MobileAirUnits.Begin(), it_end = UnitsManager_MobileAirUnits.End();
-                     it != it_end; ++it) {
-                    if (IsAbleToAttack(it->Get(), risk_group_unit, player_team) && (*it).team != player_team) {
-                        DetermineThreats(it->Get(), Point((*it).grid_x, (*it).grid_y), caution_level, teams,
-                                         &air_force_threat_map, &AiPlayer_ThreatMaps[index]);
-                    }
-                }
-
-            } else {
-                for (auto it = spotted_units.Begin(), it_end = spotted_units.End(); it != it_end; ++it) {
-                    if (IsAbleToAttack((*it).GetUnit(), risk_group_unit, player_team)) {
-                        DetermineThreats((*it).GetUnit(), Point((*it).GetUnit()->grid_x, (*it).GetUnit()->grid_y),
-                                         caution_level, teams, &air_force_threat_map, &AiPlayer_ThreatMaps[index]);
-                    }
+            for (auto it = spotted_units.Begin(), it_end = spotted_units.End(); it != it_end; ++it) {
+                if (IsAbleToAttack((*it).GetUnit(), risk_group_unit, player_team)) {
+                    DetermineThreats((*it).GetUnit(), Point((*it).GetUnit()->grid_x, (*it).GetUnit()->grid_y),
+                                     caution_level, &air_force_threat_map, &AiPlayer_ThreatMaps[index]);
                 }
             }
 
         } else {
             for (auto it = spotted_units.Begin(), it_end = spotted_units.End(); it != it_end; ++it) {
                 if (IsAbleToAttack((*it).GetUnit(), risk_group_unit, player_team)) {
-                    DetermineThreats((*it).GetUnit(), (*it).GetLastPosition(), caution_level, teams,
-                                     &air_force_threat_map, &AiPlayer_ThreatMaps[index]);
+                    DetermineThreats((*it).GetUnit(), (*it).GetLastPosition(), caution_level, &air_force_threat_map,
+                                     &AiPlayer_ThreatMaps[index]);
                 }
             }
         }
@@ -1693,88 +1670,88 @@ void AiPlayer::AddBuildOrder(SmartObjectArray<BuildOrder>* build_orders, uint16_
     }
 }
 
-void AiPlayer::CheckReconnaissanceNeeds(SmartObjectArray<BuildOrder>* build_orders, ResourceID unit_type, uint16_t team,
-                                        uint16_t enemy_team, bool mode) {
+void AiPlayer::CheckReconnaissanceNeeds(SmartObjectArray<BuildOrder>* build_orders, ResourceID unit_type, bool mode) {
+    TeamUnits* team_units = UnitsManager_TeamInfo[player_team].team_units;
     int32_t unit_range_max = 0;
-    int32_t unit_scan = UnitsManager_TeamInfo[team].team_units->GetBaseUnitValues(unit_type)->GetAttribute(ATTRIB_SCAN);
-    CTInfo* team_info = &UnitsManager_TeamInfo[enemy_team];
+    int32_t unit_scan = team_units->GetBaseUnitValues(unit_type)->GetAttribute(ATTRIB_SCAN);
 
-    for (int32_t i = 0; i < UNIT_END; ++i) {
-        UnitValues* unit_values = UnitsManager_GetCurrentUnitValues(team_info, static_cast<ResourceID>(i));
+    // ranges come from the armed enemy units the team has spotted, never from the enemies' unit tables
+    for (auto it = spotted_units.Begin(), it_end = spotted_units.End(); it != it_end; ++it) {
+        UnitInfo* unit = (*it).GetUnit();
 
-        if (unit_values->GetAttribute(ATTRIB_ATTACK) > 0 && (mode || unit_values->GetAttribute(ATTRIB_SPEED)) &&
-            Access_IsValidAttackTargetType(static_cast<ResourceID>(i), unit_type)) {
-            if (team_info->team_units->GetBaseUnitValues(static_cast<ResourceID>(i))->GetAttribute(ATTRIB_RANGE) >
-                unit_scan) {
-                // do not compete with units that are in another league
-                continue;
+        if (unit && IsEnemyTeam(unit->team)) {
+            UnitValues* unit_values = unit->GetBaseValues();
+
+            if (unit_values->GetAttribute(ATTRIB_ATTACK) > 0 && (mode || unit_values->GetAttribute(ATTRIB_SPEED)) &&
+                Access_IsValidAttackTargetType(unit->GetUnitType(), unit_type)) {
+                if (team_units->GetBaseUnitValues(unit->GetUnitType())->GetAttribute(ATTRIB_RANGE) > unit_scan) {
+                    // do not compete with units that are in another league
+                    continue;
+                }
+
+                unit_range_max = std::max(unit_range_max, unit_values->GetAttribute(ATTRIB_RANGE) + 1);
             }
-
-            unit_range_max = std::max(unit_range_max, unit_values->GetAttribute(ATTRIB_RANGE) + 1);
         }
     }
 
     if (unit_range_max >
-        UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[team], unit_type)->GetAttribute(ATTRIB_SCAN)) {
-        AddBuildOrder(build_orders, team, unit_type, ATTRIB_SCAN);
+        UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[player_team], unit_type)->GetAttribute(ATTRIB_SCAN)) {
+        AddBuildOrder(build_orders, player_team, unit_type, ATTRIB_SCAN);
     }
+}
+
+int32_t AiPlayer::GetMaxSpottedScan(ResourceID unit_type) {
+    int32_t result = 0;
+
+    for (auto it = spotted_units.Begin(), it_end = spotted_units.End(); it != it_end; ++it) {
+        UnitInfo* unit = (*it).GetUnit();
+
+        if (unit && unit->GetUnitType() == unit_type && IsEnemyTeam(unit->team)) {
+            result = std::max(result, unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN));
+        }
+    }
+
+    return result;
 }
 
 SmartObjectArray<BuildOrder> AiPlayer::ChooseStrategicBuildOrders(bool mode) {
     SmartObjectArray<BuildOrder> build_orders;
 
-    if (!IsTargetTeamDefined()) {
-        for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-            if (team != player_team) {
-                if (!IsTargetTeamDefined() ||
-                    (UnitsManager_TeamInfo[team].team_points > UnitsManager_TeamInfo[target_team].team_points &&
-                     (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE &&
-                      UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_ELIMINATED))) {
-                    target_team = team;
-                }
-            }
+    if (mode) {
+        switch (strategy) {
+            case AI_STRATEGY_MISSILES:
+            case AI_STRATEGY_COMBINED_ARMS: {
+                CheckReconnaissanceNeeds(&build_orders, SCANNER, false);
+            } break;
+
+            case AI_STRATEGY_AIR: {
+                CheckReconnaissanceNeeds(&build_orders, AWAC, true);
+            } break;
+
+            case AI_STRATEGY_SEA: {
+                CheckReconnaissanceNeeds(&build_orders, FASTBOAT, true);
+            } break;
         }
-    }
 
-    if (IsTargetTeamDefined()) {
-        if (mode) {
-            switch (strategy) {
-                case AI_STRATEGY_MISSILES:
-                case AI_STRATEGY_COMBINED_ARMS: {
-                    CheckReconnaissanceNeeds(&build_orders, SCANNER, player_team, target_team, false);
-                } break;
+    } else {
+        CheckReconnaissanceNeeds(&build_orders, SCANNER, true);
+        CheckReconnaissanceNeeds(&build_orders, AWAC, true);
+        CheckReconnaissanceNeeds(&build_orders, FASTBOAT, true);
+        CheckReconnaissanceNeeds(&build_orders, SCOUT, true);
 
-                case AI_STRATEGY_AIR: {
-                    CheckReconnaissanceNeeds(&build_orders, AWAC, player_team, target_team, true);
-                } break;
-
-                case AI_STRATEGY_SEA: {
-                    CheckReconnaissanceNeeds(&build_orders, FASTBOAT, player_team, target_team, true);
-                } break;
-            }
-
-        } else {
-            CheckReconnaissanceNeeds(&build_orders, SCANNER, player_team, target_team, true);
-            CheckReconnaissanceNeeds(&build_orders, AWAC, player_team, target_team, true);
-            CheckReconnaissanceNeeds(&build_orders, FASTBOAT, player_team, target_team, true);
-            CheckReconnaissanceNeeds(&build_orders, SCOUT, player_team, target_team, true);
-
-            if (UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[target_team], INFANTRY)
-                    ->GetAttribute(ATTRIB_SCAN) >=
-                UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[player_team], COMMANDO)
-                    ->GetAttribute(ATTRIB_SCAN)) {
-                AddBuildOrder(&build_orders, player_team, COMMANDO, ATTRIB_SCAN);
-            }
-
-            if (UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[target_team], CORVETTE)
-                    ->GetAttribute(ATTRIB_SCAN) >=
-                UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[player_team], SUBMARNE)
-                    ->GetAttribute(ATTRIB_SCAN)) {
-                AddBuildOrder(&build_orders, player_team, SUBMARNE, ATTRIB_SCAN);
-            }
-
-            ProcessBuildOrders(build_orders);
+        if (GetMaxSpottedScan(INFANTRY) >=
+            UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[player_team], COMMANDO)
+                ->GetAttribute(ATTRIB_SCAN)) {
+            AddBuildOrder(&build_orders, player_team, COMMANDO, ATTRIB_SCAN);
         }
+
+        if (GetMaxSpottedScan(CORVETTE) >=
+            UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[player_team], SUBMARNE)
+                ->GetAttribute(ATTRIB_SCAN)) {
+            AddBuildOrder(&build_orders, player_team, SUBMARNE, ATTRIB_SCAN);
+        }
+
+        ProcessBuildOrders(build_orders);
     }
 
     if (!build_orders->GetCount()) {
@@ -2143,7 +2120,8 @@ void AiPlayer::UpgradeUnitType() {
     }
 }
 
-AiPlayer::AiPlayer() : info_map(nullptr), mine_map(nullptr), target_location(1, 1) {}
+AiPlayer::AiPlayer()
+    : attack_tasks(AttackTaskLimitMin), info_map(nullptr), mine_map(nullptr), target_location(1, 1) {}
 
 AiPlayer::~AiPlayer() {
     if (info_map) {
@@ -2166,8 +2144,6 @@ AiPlayer::~AiPlayer() {
 }
 
 int32_t AiPlayer::GetStrategy() const { return strategy; }
-
-int16_t AiPlayer::GetTargetTeam() const { return target_team; }
 
 uint8_t** AiPlayer::GetInfoMap() { return info_map; }
 
@@ -2246,84 +2222,9 @@ void AiPlayer::AddMilitaryUnit(UnitInfo* unit) {
     }
 }
 
-bool AiPlayer::IsTargetTeamDefined() const { return (target_team >= PLAYER_TEAM_RED && target_team < PLAYER_TEAM_MAX); }
-
-bool AiPlayer::IsTargetTeam(const uint8_t team) const {
-    bool result;
-
-    if (ResourceManager_GetSettings()->GetNumericValue("cheating_computer") >= COMPUTER_CHEATING_LEVEL_INSUFFERABLE) {
-        result = (team == target_team);
-
-    } else {
-        result = (team != player_team) && (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE) &&
-                 (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_ELIMINATED);
-    }
-
-    return result;
-}
-
-void AiPlayer::DetermineTargetTeam() {
-    if (ResourceManager_GetSettings()->GetNumericValue("cheating_computer") >= COMPUTER_CHEATING_LEVEL_SHAMELESS) {
-        int32_t player_team_points = UnitsManager_TeamInfo[player_team].team_points;
-        int32_t team_building_counts[PLAYER_TEAM_MAX];
-        int32_t target_team_points;
-        int32_t enemy_team_points;
-
-        memset(team_building_counts, 0, sizeof(team_building_counts));
-
-        for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
-             ++it) {
-            ++team_building_counts[(*it).team];
-        }
-
-        if (IsTargetTeamDefined()) {
-            target_team_points = UnitsManager_TeamInfo[target_team].team_points;
-
-            if (UnitsManager_TeamInfo[target_team].team_type != TEAM_TYPE_COMPUTER) {
-                if (target_team_points < player_team_points) {
-                    ++target_team_points;
-                } else {
-                    target_team_points += 1000;
-                }
-            }
-
-        } else {
-            target_team_points = -1;
-        }
-
-        for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-            if (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE && player_team != team && target_team != team) {
-                enemy_team_points = UnitsManager_TeamInfo[team].team_points;
-
-                if (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_COMPUTER) {
-                    if (enemy_team_points < player_team_points) {
-                        ++enemy_team_points;
-                    } else {
-                        enemy_team_points += 1000;
-                    }
-                }
-
-                if (!IsTargetTeamDefined() || target_team_points < enemy_team_points ||
-                    (target_team_points == enemy_team_points &&
-                     team_building_counts[target_team] < team_building_counts[team])) {
-                    target_team = team;
-                    target_team_points = enemy_team_points;
-                }
-            }
-        }
-
-    } else {
-        for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-            if (team != player_team) {
-                if (!IsTargetTeamDefined() ||
-                    (UnitsManager_TeamInfo[team].team_points > UnitsManager_TeamInfo[target_team].team_points &&
-                     (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE &&
-                      UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_ELIMINATED))) {
-                    target_team = team;
-                }
-            }
-        }
-    }
+bool AiPlayer::IsEnemyTeam(const uint8_t team) const {
+    return (team != player_team) && (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE) &&
+           (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_ELIMINATED);
 }
 
 void AiPlayer::BeginTurn() {
@@ -2353,7 +2254,7 @@ void AiPlayer::BeginTurn() {
 
         UpdatePriorityTasks();
 
-        DetermineTargetTeam();
+        ATTACK_CENSUS_LOG(player_team);
 
         if (need_init) {
             SDL_assert(check_assaults_task == nullptr);
@@ -2526,20 +2427,8 @@ void AiPlayer::BeginTurn() {
                 }
             }
 
-            if (ResourceManager_GetSettings()->GetNumericValue("opponent") >= OPPONENT_TYPE_EXPERT &&
-                ResourceManager_GetSettings()->GetNumericValue("cheating_computer") >=
-                    COMPUTER_CHEATING_LEVEL_TOLERABLE) {
-                for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End();
-                     it != it_end; ++it) {
-                    if ((*it).team != player_team &&
-                        ((*it).GetUnitType() == MININGST || (*it).GetUnitType() == GREENHSE)) {
-                        Ai_UnitSpotted(it->Get(), player_team);
-                    }
-                }
-            }
-
             for (auto it = spotted_units.Begin(), it_end = spotted_units.End(); it != it_end; ++it) {
-                if (IsKeyFacility((*it).GetUnit()->GetUnitType()) && IsTargetTeam((*it).GetUnit()->team)) {
+                if (IsKeyFacility((*it).GetUnit()->GetUnitType()) && IsEnemyTeam((*it).GetUnit()->team)) {
                     DetermineAttack(it->Get(), TASK_PRIORITY_ATTACK_DEFAULT);
                 }
             }
@@ -2581,18 +2470,14 @@ void AiPlayer::BeginTurn() {
             need_init = false;
         }
 
-        bool teams[PLAYER_TEAM_MAX];
-
-        AiAttack_GetTargetTeams(player_team, teams);
-
         for (auto it = spotted_units.Begin(), it_end = spotted_units.End(); it != it_end; ++it) {
             if (!(*it).GetTask()) {
                 UnitInfo* target = (*it).GetUnit();
 
-                if (AiAttack_IsWithinReach(target, player_team, teams)) {
+                if (AiAttack_IsWithinReach(target, player_team)) {
                     DetermineAttack(it->Get(), TASK_PRIORITY_ATTACK_MOBILE);
 
-                } else if (IsTargetTeam(target->team) || target->team == PLAYER_TEAM_ALIEN) {
+                } else if (IsEnemyTeam(target->team) || target->team == PLAYER_TEAM_ALIEN) {
                     if ((target->GetUnitType() == CONSTRCT && target->GetOrder() == ORDER_BUILD) ||
                         IsKeyFacility(target->GetUnitType()) ||
                         (target->team == PLAYER_TEAM_ALIEN &&
@@ -3033,7 +2918,6 @@ bool AiPlayer::CreateBuilding(ResourceID unit_type, Point position, Task* task) 
 
 void AiPlayer::Init(uint16_t team) {
     strategy = AI_STRATEGY_RANDOM;
-    target_team = -1;
     greenhouse_ratio = -1;
     minefield_density = -1;
 
@@ -3079,9 +2963,7 @@ void AiPlayer::Init(uint16_t team) {
     attack_reserve_task = nullptr;
     defense_reserve_task = nullptr;
 
-    for (int32_t i = 0; i < AttackTaskLimit; ++i) {
-        attack_tasks[i] = nullptr;
-    }
+    attack_tasks.assign(AttackTaskLimitMin, nullptr);
 
     int32_t opponent = ResourceManager_GetSettings()->GetNumericValue("opponent");
 
@@ -3773,11 +3655,11 @@ void AiPlayer::UnitSpotted(UnitInfo* unit) {
             }
 
             if ((IsKeyFacility(unit->GetUnitType()) || (!is_key_facility && unit->GetUnitType() == CONSTRCT)) &&
-                IsTargetTeam(unit->team)) {
+                IsEnemyTeam(unit->team)) {
                 DetermineAttack(&*spotted_unit2, TASK_PRIORITY_ATTACK_DEFAULT);
 
             } else if (!is_key_facility && unit->GetBaseValues()->GetAttribute(ATTRIB_ROUNDS) > 0) {
-                if (IsTargetTeam(unit->team)) {
+                if (IsEnemyTeam(unit->team)) {
                     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End();
                          it != it_end; ++it) {
                         if ((*it).team == unit->team && IsKeyFacility((*it).GetUnitType()) &&
@@ -4260,7 +4142,6 @@ void AiPlayer::FileSave(SmartFileWriter& file) {
     file.Write(strategy);
     file.Write(greenhouse_ratio);
     file.Write(minefield_density);
-    file.Write(target_team);
 
     file.WriteObjectCount(spotted_units.GetCount());
 
@@ -4304,7 +4185,11 @@ void AiPlayer::FileLoad(SmartFileReader& file) {
 
     file.Read(greenhouse_ratio);
     file.Read(minefield_density);
-    file.Read(target_team);
+
+    if (file.GetFormat() == SmartFileFormat::V70) {
+        int16_t target_team;
+        file.Read(target_team);
+    }
 
     item_count = file.ReadObjectCount();
 

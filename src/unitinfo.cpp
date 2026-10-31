@@ -35,6 +35,7 @@
 #include "hash.hpp"
 #include "message_manager.hpp"
 #include "mouseevent.hpp"
+#include "order_log.hpp"
 #include "paths_manager.hpp"
 #include "randomizer.hpp"
 #include "registerarray.hpp"
@@ -1439,6 +1440,15 @@ void UnitInfo::Redraw() {
 
     OffsetDrawZones(offset_x, offset_y);
 
+    // the unit is back at the center of its cell, a shake under way goes on from there with the steps it has done
+    const uint8_t shake_steps = shake_effect_state;
+
+    shake_effect_state = 0;
+
+    while (shake_effect_state != shake_steps) {
+        ShakeSabotage();
+    }
+
     if ((flags & MOBILE_AIR_UNIT) && (flags & HOVERING)) {
         shadow_offset.x = -GFX_MAP_TILE_SIZE;
         shadow_offset.y = -GFX_MAP_TILE_SIZE;
@@ -1631,7 +1641,7 @@ bool UnitInfo::ExecuteMove() {
 
     RefreshScreen();
 
-    if (pin_count > 0) {
+    if (UnitsManager_IsEngaged(this)) {
         result = false;
     } else {
         if (path) {
@@ -1663,6 +1673,7 @@ bool UnitInfo::ExecuteMove() {
             } else {
                 orders = ORDER_AWAIT;
                 state = ORDER_STATE_EXECUTING_ORDER;
+                ORDER_LOG_WRITE_HERE(this);
                 result = false;
             }
         }
@@ -1682,6 +1693,8 @@ void UnitInfo::ClearBuildListAndPath() {
         state = ORDER_STATE_EXECUTING_ORDER;
     }
 
+    ORDER_LOG_WRITE(this);
+
     build_list.Clear();
 }
 
@@ -1690,6 +1703,7 @@ void UnitInfo::Build() {
 
     build_unit_type = *build_list[0];
     orders = ORDER_BUILD;
+    ORDER_LOG_WRITE_HERE(this);
 
     if (path != nullptr) {
         if (UnitsManager_IssueBuildOrder(this, &grid_x, &grid_y, build_unit_type)) {
@@ -1722,7 +1736,7 @@ void UnitInfo::Move() {
     bool team_visibility;
 
     do {
-        if (pin_count > 0) {
+        if (UnitsManager_IsEngaged(this)) {
             return;
         }
 
@@ -2497,7 +2511,7 @@ void UnitInfo::FileLoad(SmartFileReader& file) noexcept {
     file.Read(auto_survey);
     file.Read(ai_state_bits);
 
-    ai_state_bits &= ~AI_STATE_MOVE_FINISHED_REMINDER;
+    ai_state_bits &= ~(AI_STATE_MOVE_FINISHED_REMINDER | AI_STATE_RETREAT_REMINDER);
 
     if (build_rate == 0) {
         build_rate = 1;
@@ -2747,6 +2761,7 @@ void UnitInfo::StartBuilding() {
         complex->workers -= Cargo_GetLifeConsumptionRate(unit_type);
 
         state = ORDER_STATE_EXECUTING_ORDER;
+        ORDER_LOG_WRITE_HERE(this);
 
         if (GameManager_PlayerTeam == team) {
             GameManager_OptimizeProduction(team, &*complex, true, true);
@@ -2766,6 +2781,7 @@ void UnitInfo::StartBuilding() {
 
         moved = 0;
         state = ORDER_STATE_BUILD_IN_PROGRESS;
+        ORDER_LOG_WRITE_HERE(this);
 
         if (unit_type == CONSTRCT) {
             UnitsManager_SetNewOrderInt(this, ORDER_AWAIT_TAPE_POSITIONING, ORDER_STATE_TAPE_POSITIONING_INIT);
@@ -2971,6 +2987,7 @@ void UnitInfo::UpdateProduction() {
 
     if (state == ORDER_STATE_READY_TO_EXECUTE_ORDER) {
         state = ORDER_STATE_EXECUTING_ORDER;
+        ORDER_LOG_WRITE_HERE(this);
     }
 
     if (complex) {
@@ -3217,7 +3234,8 @@ void UnitInfo::ClearPins() { pin_count = 0; }
 bool UnitInfo::AttemptSideStep(int32_t grid_x, int32_t grid_y, int32_t angle) {
     bool result;
 
-    if (orders == ORDER_AWAIT || orders == ORDER_SENTRY || orders == ORDER_MOVE) {
+    // an engaged unit keeps its cell and its order, the mover has to treat it as a blocker
+    if ((orders == ORDER_AWAIT || orders == ORDER_SENTRY || orders == ORDER_MOVE) && !UnitsManager_IsEngaged(this)) {
         if (speed > 0 || UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
             if (this->grid_x != grid_x || this->grid_y != grid_y) {
                 int32_t backup_grid_x = this->grid_x;
@@ -3343,6 +3361,7 @@ bool UnitInfo::AttemptSideStep(int32_t grid_x, int32_t grid_y, int32_t angle) {
 
                     orders = ORDER_MOVE;
                     state = ORDER_STATE_IN_PROGRESS;
+                    ORDER_LOG_WRITE_HERE(this);
 
                     result = true;
 
@@ -3442,6 +3461,7 @@ void UnitInfo::SpawnNewUnit() {
 
         orders = ORDER_AWAIT;
         state = ORDER_STATE_EXECUTING_ORDER;
+        ORDER_LOG_WRITE_HERE(this);
 
         if (GetParent()->flags & BUILDING) {
             move_to_grid_x = grid_x;
@@ -3483,6 +3503,7 @@ void UnitInfo::SpawnNewUnit() {
             storage = 1;
             orders = ORDER_BUILD;
             state = ORDER_STATE_UNIT_READY;
+            ORDER_LOG_WRITE_HERE(this);
 
             DrawSpriteFrame(image_base);
             ScheduleDelayedTasks(true);
@@ -3543,6 +3564,8 @@ void UnitInfo::SpawnNewUnit() {
                     state = ORDER_STATE_EXECUTING_ORDER;
                 }
 
+                ORDER_LOG_WRITE_HERE(this);
+
                 SetSpriteFrameForTerrain(grid_x, grid_y);
 
                 if (GetTask()) {
@@ -3552,6 +3575,7 @@ void UnitInfo::SpawnNewUnit() {
             } else {
                 orders = ORDER_BUILD;
                 state = ORDER_STATE_UNIT_READY;
+                ORDER_LOG_WRITE_HERE(this);
 
                 if (GetTask()) {
                     utility_unit->AddTask(GetTask());
@@ -3601,6 +3625,8 @@ void UnitInfo::BlockedOnPathRequest(bool mode, bool skip_notification) {
 
     state = ORDER_STATE_EXECUTING_ORDER;
 
+    ORDER_LOG_WRITE(this);
+
     if (!ResourceManager_GetSettings()->GetNumericValue("disable_fire")) {
         delayed_reaction = true;
     }
@@ -3608,7 +3634,9 @@ void UnitInfo::BlockedOnPathRequest(bool mode, bool skip_notification) {
     MoveFinished(mode);
 
     if (Remote_IsNetworkGame) {
-        if (!skip_notification) {
+        // every peer runs the movement code, only the peer that controls the unit's team notifies the others
+        if (!skip_notification && UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_REMOTE &&
+            UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_ELIMINATED) {
             Remote_SendNetPacket_41(this, mode);
         }
     }
@@ -3743,6 +3771,8 @@ void UnitInfo::RestoreOrders() {
 
     orders = prior_orders;
     state = prior_state;
+
+    ORDER_LOG_WRITE(this);
 }
 
 void UnitInfo::AddDelayedTask(Task* task) { delayed_tasks.PushBack(*task); }
@@ -4020,11 +4050,9 @@ void UnitInfo::StepMoveUnit(Point position) {
     }
 }
 
-void UnitInfo::PrepareConstructionSite(ResourceID unit_type) {
-    uint32_t unit_flags = ResourceManager_GetUnit(unit_type).GetFlags();
-    SmartPointer<UnitInfo> utility_unit(Access_GetConstructionUtility(team, grid_x, grid_y));
-    Point position(utility_unit->grid_x, utility_unit->grid_y);
-
+/* the hidden units that the start of a building moves off its site */
+template <typename Function>
+static void UnitInfo_ForEachUnitToDisplace(Point position, uint32_t unit_flags, Function&& function) {
     if (unit_flags & BUILDING) {
         Point site;
 
@@ -4035,14 +4063,34 @@ void UnitInfo::PrepareConstructionSite(ResourceID unit_type) {
                 if (units) {
                     // the end node must be cached in case Hash_MapHash.Remove() deletes the list
                     for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-                        if ((*it).unit_type == COMMANDO || (*it).unit_type == SUBMARNE || (*it).unit_type == CLNTRANS) {
-                            (*it).StepMoveUnit(position);
+                        if ((*it).GetUnitType() == COMMANDO || (*it).GetUnitType() == SUBMARNE ||
+                            (*it).GetUnitType() == CLNTRANS) {
+                            function(*it);
                         }
                     }
                 }
             }
         }
     }
+}
+
+static bool UnitInfo_IsSiteEngaged(UnitInfo* builder, ResourceID unit_type) {
+    SmartPointer<UnitInfo> utility_unit(Access_GetConstructionUtility(builder->team, builder->grid_x, builder->grid_y));
+    bool result{false};
+
+    UnitInfo_ForEachUnitToDisplace(Point(utility_unit->grid_x, utility_unit->grid_y),
+                                   ResourceManager_GetUnit(unit_type).GetFlags(),
+                                   [&result](UnitInfo& unit) { result = result || UnitsManager_IsEngaged(&unit); });
+
+    return result;
+}
+
+void UnitInfo::PrepareConstructionSite(ResourceID unit_type) {
+    uint32_t unit_flags = ResourceManager_GetUnit(unit_type).GetFlags();
+    SmartPointer<UnitInfo> utility_unit(Access_GetConstructionUtility(team, grid_x, grid_y));
+    Point position(utility_unit->grid_x, utility_unit->grid_y);
+
+    UnitInfo_ForEachUnitToDisplace(position, unit_flags, [&position](UnitInfo& unit) { unit.StepMoveUnit(position); });
 
     if (unit_flags & REQUIRES_SLAB) {
         ResourceID slab_type = (unit_flags & BUILDING) ? LRGSLAB : SMLSLAB;
@@ -4164,6 +4212,8 @@ void UnitInfo::CancelBuilding() {
             build_time = 0;
         }
 
+        ORDER_LOG_WRITE(this);
+
         if (GameManager_SelectedUnit == this) {
             ResourceManager_GetSoundManager().PlaySfx(this, Unit::SFX_TYPE_POWER_CONSUMPTION_END);
 
@@ -4185,6 +4235,8 @@ void UnitInfo::CancelBuilding() {
 
         orders = ORDER_AWAIT;
         state = ORDER_STATE_EXECUTING_ORDER;
+
+        ORDER_LOG_WRITE(this);
 
         if (unit_type == CONSTRCT || (unit_type == BULLDOZR && (GetParent()->flags & BUILDING))) {
             move_to_grid_x = grid_x;
@@ -4326,15 +4378,24 @@ void UnitInfo::PositionInTape() {
     if (state == ORDER_STATE_TAPE_POSITIONING_INIT) {
         moved = 0;
         state = ORDER_STATE_TAPE_POSITIONING_ENTER;
+        ORDER_LOG_WRITE_HERE(this);
 
     } else if (state == ORDER_STATE_TAPE_POSITIONING_DEINIT) {
         moved = 0;
         state = ORDER_STATE_TAPE_POSITIONING_LEAVE;
+        ORDER_LOG_WRITE_HERE(this);
     }
 
     RefreshScreen();
 
     if (moved >= 4) {
+        // the site is prepared only when nothing that it takes off its cell or off the map is engaged
+        if ((unit_type == MASTER && (UnitsManager_IsEngaged(this) || UnitInfo_IsSiteEngaged(this, MININGST))) ||
+            (unit_type == CONSTRCT && state == ORDER_STATE_TAPE_POSITIONING_ENTER &&
+             UnitInfo_IsSiteEngaged(this, GetConstructedUnitType()))) {
+            return;
+        }
+
         uint8_t old_state = state;
 
         RestoreOrders();
@@ -4579,6 +4640,13 @@ void UnitInfo::ShakeSabotage() {
     }
 }
 
+void UnitInfo::FinishShakeSabotage() {
+    // the steps of a shake add up to nothing over the full cycle only, so a shake cut short is run to its end
+    while (shake_effect_state) {
+        ShakeSabotage();
+    }
+}
+
 void UnitInfo::PrepareFire() {
     int32_t unit_angle = angle;
     bool team_visibility = IsVisibleToTeam(GameManager_PlayerTeam) || GameManager_MaxSpy;
@@ -4687,6 +4755,7 @@ void UnitInfo::PrepareFire() {
     }
 
     state = ORDER_STATE_FIRE_IN_PROGRESS;
+    ORDER_LOG_WRITE_HERE(this);
 }
 
 void UnitInfo::ProgressFire() {
@@ -4811,6 +4880,8 @@ UnitOrderType UnitInfo::SetOrder(const UnitOrderType order) noexcept {
 
     this->orders = order;
 
+    ORDER_LOG_WRITE(this);
+
     return previous_order;
 }
 
@@ -4830,6 +4901,8 @@ UnitOrderStateType UnitInfo::SetOrderState(const UnitOrderStateType order_state)
     auto previous_order_state{this->state};
 
     this->state = order_state;
+
+    ORDER_LOG_WRITE(this);
 
     return previous_order_state;
 }

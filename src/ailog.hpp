@@ -22,8 +22,16 @@
 #ifndef AILOG_HPP
 #define AILOG_HPP
 
+/* AI log of debug builds, opened by the log_file_debug setting or the task log of the task debugger. Records the
+ * decisions of the computer players' tasks and the network events into ai_log.txt in the preferences folder. Release
+ * builds compile every hook to nothing.
+ */
+
+#if !defined(NDEBUG)
+
 #include <SDL3/SDL_mutex.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <cstdint>
@@ -37,7 +45,8 @@
 #include "resource_manager.hpp"
 
 class AiLog {
-    static std::ofstream AiLog_File;
+    // a writer thread owns the file, the entries reach it in batches
+    static std::atomic<bool> AiLog_Enabled;
     static SDL_Mutex* AiLog_Mutex;
     static int32_t AiLog_SectionCount;
     static int32_t AiLog_EntryCount;
@@ -69,7 +78,7 @@ public:
 
         ResourceManager_MutexLock lock(AiLog_Mutex);
 
-        if (AiLog_File.is_open() && !m_is_filtered) {
+        if (AiLog_Enabled.load(std::memory_order_relaxed) && !m_is_filtered) {
             auto message = std::format(fmt, std::forward<Args>(args)...);
             WriteLog(message);
         }
@@ -85,23 +94,25 @@ public:
 
         ResourceManager_MutexLock lock(AiLog_Mutex);
 
-        if (AiLog_File.is_open() && !m_is_filtered) {
+        if (AiLog_Enabled.load(std::memory_order_relaxed) && !m_is_filtered) {
             auto message = std::format(fmt, std::forward<Args>(args)...);
             WriteLog(message);
         }
     }
 };
 
-#if !defined(NDEBUG)
 #define AILOG(log, ...) AiLog log(__FILE__, __func__, __VA_ARGS__)
 #define AILOG_LOG(log, ...) (log).Log(__VA_ARGS__)
-#else
-#define AILOG(log, ...)
-#define AILOG_LOG(log, ...)
-#endif /* !defined(NDEBUG) */
 
 void AiLog_Open();
 void AiLog_Close();
 [[nodiscard]] bool AiLog_IsEnabled() noexcept;
+
+#else
+
+#define AILOG(log, ...)
+#define AILOG_LOG(log, ...)
+
+#endif /* !defined(NDEBUG) */
 
 #endif /* AILOG_HPP */

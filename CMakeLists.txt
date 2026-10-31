@@ -33,6 +33,9 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4)
 	add_compile_options(-fasynchronous-unwind-tables)
 endif()
 
+# Debug builds run long unattended AI games, -Og keeps them debuggable at a fraction of the -O0 cost.
+add_compile_options($<$<CONFIG:Debug>:-Og> $<$<CONFIG:Debug>:-ggdb>)
+
 set(GAME_INCLUDES "")
 set(GAME_SOURCES "")
 
@@ -42,28 +45,22 @@ add_executable(${PROJECT_NAME} ${GAME_SOURCES})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "max-port")
 
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/version_info.hpp.in" "${CMAKE_CURRENT_BINARY_DIR}/generated/version_info.hpp" @ONLY)
+
+if(MINGW)
+	# windres writes no dependency file, so the resource script's dependency on the version is set explicitly.
+	set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/max.rc" PROPERTIES
+		OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/version.hpp;${CMAKE_CURRENT_BINARY_DIR}/generated/version_info.hpp"
+	)
+endif()
+
 target_include_directories(${PROJECT_NAME} PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/src
+	${CMAKE_CURRENT_BINARY_DIR}/generated
 	${GAME_INCLUDES}
 )
 
-if(GAME_VERSION_REVISION)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE
-        GAME_VERSION_REVISION="${GAME_VERSION_REVISION}"
-    )
-endif()
-
-if(GAME_VERSION_USE_BUILD_TIME)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE
-		GAME_VERSION_USE_BUILD_TIME=${GAME_VERSION_USE_BUILD_TIME}
-    )
-endif()
-
-
 target_compile_definitions(${PROJECT_NAME} PRIVATE
-    GAME_VERSION_MAJOR=${GAME_VERSION_MAJOR}
-    GAME_VERSION_MINOR=${GAME_VERSION_MINOR}
-    GAME_VERSION_PATCH=${GAME_VERSION_PATCH}
     SDL_ASSERT_LEVEL=2
 )
 

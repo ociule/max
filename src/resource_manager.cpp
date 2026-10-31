@@ -31,7 +31,6 @@
 #include <unordered_map>
 
 #include "access.hpp"
-#include "ailog.hpp"
 #include "assertmenu.hpp"
 #include "attributes.hpp"
 #include "crash_context.hpp"
@@ -48,7 +47,7 @@
 #include "menu.hpp"
 #include "message_manager.hpp"
 #include "missionmanager.hpp"
-#include "paths.hpp"
+#include "order_log.hpp"
 #include "paths_manager.hpp"
 #include "randomizer.hpp"
 #include "screendump.h"
@@ -56,6 +55,7 @@
 #include "settings.hpp"
 #include "sha2.h"
 #include "sound_manager.hpp"
+#include "taskdebugger.hpp"
 #include "units_manager.hpp"
 #include "utf8.hpp"
 #include "window_manager.hpp"
@@ -540,7 +540,7 @@ void ResourceManager_InitInternals() {
 
     ResourceManager_InitSoundManager();
     register_pause(-1, nullptr);
-    screendump_register(GNW_KB_KEY_LALT_C, screendump_pcx);
+    screendump_register(GNW_KB_KEY_LALT_C, screendump_save);
 }
 
 void ResourceManager_TestMouse() {
@@ -571,10 +571,11 @@ void ResourceManager_ExitGame(int32_t error_code) {
 }
 
 void ResourceManager_Exit() {
+    ORDER_LOG_SHUTDOWN();
+
     ResourceManager_DeinitSoundManager();
     win_exit();
     ResourceManager_PathsManager.reset();
-    Paths_ClearSiteReservations();
     SDL_Quit();
 
     ResourceManager_DestroyMutexes();
@@ -1448,24 +1449,9 @@ void ResourceManager_LogOutputFlush() {
 
 void ResourceManager_InitAiLog() {
 #if !defined(NDEBUG)
-    bool enable = ResourceManager_GetSettings()->GetNumericValue("log_file_debug");
-
-    /* An explicit entry limit means the AI log is wanted, so start with it enabled instead of
-     * requiring the in game task debugger toggle or a network session.
-     */
-    const char* limit_env = SDL_getenv("MAX_AILOG_ENTRY_LIMIT");
-
-    if (limit_env && limit_env[0] != '\0') {
-        try {
-            enable = enable || (std::stoi(limit_env) != 0);
-
-        } catch (...) {
-            /* keep whatever log_file_debug asked for */
-        }
-    }
-
-    if (enable) {
-        AiLog_Open();
+    /* the setting starts in the task log mode of the in game toggle, so the task debug info is on as well */
+    if (ResourceManager_GetSettings()->GetNumericValue("log_file_debug")) {
+        TaskDebugger_EnableTaskLog();
     }
 #endif /* !defined(NDEBUG) */
 }

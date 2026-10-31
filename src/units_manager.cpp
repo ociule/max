@@ -40,6 +40,7 @@
 #include "game_manager.hpp"
 #include "hash.hpp"
 #include "message_manager.hpp"
+#include "order_log.hpp"
 #include "paths_manager.hpp"
 #include "powercapture.hpp"
 #include "production_manager.hpp"
@@ -53,6 +54,7 @@
 #include "smartlist.hpp"
 #include "sound_manager.hpp"
 #include "survey.hpp"
+#include "task.hpp"
 #include "teamunits.hpp"
 #include "unitevents.hpp"
 #include "unitinfo.hpp"
@@ -142,6 +144,7 @@ static void UnitsManager_ActivateUnit(UnitInfo* unit);
 static void UnitsManager_StartExplosion(UnitInfo* unit);
 static void UnitsManager_ProgressExplosion(UnitInfo* unit);
 static void UnitsManager_ProgressUnloading(UnitInfo* unit);
+static bool UnitsManager_IsUnloadSiteTaken(UnitInfo* unit);
 static void UnitsManager_StartClearing(UnitInfo* unit);
 static void UnitsManager_ProgressLoading(UnitInfo* unit);
 static void UnitsManager_BuildingReady(UnitInfo* unit);
@@ -1364,6 +1367,64 @@ int32_t UnitsManager_GetStealthChancePercentage(UnitInfo* unit1, UnitInfo* unit2
     return chance;
 }
 
+bool UnitsManager_IsValidStealthTarget(UnitInfo* unit, UnitInfo* target, int32_t order) {
+    // the one rule for the target of an infiltrator: the cursor offers the action by it and the action resolves by
+    // it, so a target that moved away, boarded, started firing or transforming, or died meanwhile escapes; only what
+    // the infiltrator could target qualifies, as the cursor finds its targets that way, which leaves submarines out
+    const auto target_order = target->GetOrder();
+    bool result;
+
+    if (target->team == unit->team || target->hits == 0 || !(target->flags & ELECTRONIC_UNIT) ||
+        ((target->flags & MOBILE_AIR_UNIT) && (target->flags & HOVERING)) || target_order == ORDER_IDLE ||
+        (target_order == ORDER_AWAIT_SCALING && target->GetPriorOrder() == ORDER_IDLE) ||
+        target_order == ORDER_TRANSFORM || target_order == ORDER_FIRE || target_order == ORDER_EXPLODE ||
+        target->GetOrderState() == ORDER_STATE_DESTROY || !Task_IsAdjacent(target, unit->grid_x, unit->grid_y) ||
+        !Access_IsValidAttackTarget(unit, target)) {
+        result = false;
+
+    } else if (order == ORDER_AWAIT_STEAL_UNIT) {
+        result = !(target->flags & STATIONARY) &&
+                 !((target->GetUnitType() == CLNTRANS || target->GetUnitType() == SEATRANS ||
+                    target->GetUnitType() == AIRTRANS) &&
+                   target->storage);
+
+    } else {
+        result = target_order != ORDER_DISABLE;
+    }
+
+    return result;
+}
+
+static bool UnitsManager_IsStealthActionInProgress(UnitInfo* unit) {
+    const auto order = unit->GetOrder();
+    const auto prior_order = unit->GetPriorOrder();
+
+    return unit->hits > 0 && unit->GetOrderState() != ORDER_STATE_DESTROY &&
+           (order == ORDER_AWAIT_STEAL_UNIT || order == ORDER_AWAIT_DISABLE_UNIT ||
+            (order == ORDER_AWAIT_SCALING &&
+             (prior_order == ORDER_AWAIT_STEAL_UNIT || prior_order == ORDER_AWAIT_DISABLE_UNIT)));
+}
+
+static bool UnitsManager_IsEngagedByInfiltrator(UnitInfo* unit) {
+    // the infiltrator holds its target from the order to the resolution; derived from the infiltrator's own order
+    // and parent, so the hold cannot leak, survives saving and ends with the sequence or the infiltrator
+    for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
+         it != it_end; ++it) {
+        if ((*it).GetUnitType() == COMMANDO && (*it).GetParent() == unit &&
+            UnitsManager_IsStealthActionInProgress(it->Get())) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool UnitsManager_IsEngaged(UnitInfo* unit) {
+    // the one test of every primitive that takes a unit off its cell or off the map: an attack pins its target and
+    // an infiltrator holds its target, and both have to find the unit where it was
+    return unit->AreTherePins() || UnitsManager_IsEngagedByInfiltrator(unit);
+}
+
 SmartPointer<UnitInfo> UnitsManager_SpawnUnit(ResourceID unit_type, uint16_t team, int32_t grid_x, int32_t grid_y,
                                               UnitInfo* parent) {
     SmartPointer<UnitInfo> unit;
@@ -1784,6 +1845,8 @@ int32_t UnitsManager_GetFiringAngle(int32_t distance_x, int32_t distance_y) {
 }
 
 void UnitsManager_ScaleUnit(UnitInfo* unit, const UnitOrderStateType state) {
+    ORDER_LOG_ISSUER();
+
     if (GameManager_PlayerTeam == unit->team) {
         ResourceManager_GetSoundManager().PlaySfx(
             unit, state == ORDER_STATE_EXPAND ? Unit::SFX_TYPE_EXPAND : Unit::SFX_TYPE_SHRINK);
@@ -1795,6 +1858,8 @@ void UnitsManager_ScaleUnit(UnitInfo* unit, const UnitOrderStateType state) {
 }
 
 void UnitsManager_ProcessOrders() {
+    ORDER_LOG_TICK();
+
     UnitsManager_BobEffectQuota = 5;
 
     Ai_ClearTasksPendingFlags();
@@ -1820,14 +1885,22 @@ void UnitsManager_ProcessOrders() {
         if (UnitsManager_PendingAttacks.GetCount() > 0) {
             auto unit_it = UnitsManager_PendingAttacks.Begin();
 
-            SDL_assert((*unit_it).hits > 0);
+            if ((*unit_it).hits == 0 || (*unit_it).GetOrderState() == ORDER_STATE_DESTROY) {
+                // the attacker is dying, UnitsManager_DestroyUnit() releases its pin
+                UnitsManager_PendingAttacks.Remove(unit_it);
 
-            if ((*unit_it).shots > 0) {
-                if ((*unit_it).GetOrder() == ORDER_FIRE) {
-                    (*unit_it).SetOrderState(ORDER_STATE_ATTACK_BEGINNING);
+            } else if ((*unit_it).GetOrder() != ORDER_FIRE) {
+                // a hit animation only suspends the fire order, any other order abandons the attack
+                if ((*unit_it).GetOrder() != ORDER_EXPLODE || (*unit_it).GetPriorOrder() != ORDER_FIRE) {
+                    (*unit_it).UpdatePinCount((*unit_it).fire_on_grid_x, (*unit_it).fire_on_grid_y, -1);
 
                     UnitsManager_PendingAttacks.Remove(unit_it);
                 }
+
+            } else if ((*unit_it).shots > 0) {
+                (*unit_it).SetOrderState(ORDER_STATE_ATTACK_BEGINNING);
+
+                UnitsManager_PendingAttacks.Remove(unit_it);
 
             } else {
                 AILOG(log, "{} at [{},{}] cannot fire.",
@@ -1876,6 +1949,8 @@ void UnitsManager_ProcessOrders() {
 }
 
 void UnitsManager_SetNewOrderInt(UnitInfo* unit, const UnitOrderType order, const UnitOrderStateType state) {
+    ORDER_LOG_ISSUER();
+
     if (unit->GetOrder() != ORDER_EXPLODE && unit->GetOrderState() != ORDER_STATE_DESTROY) {
         bool delete_path = false;
 
@@ -1913,6 +1988,8 @@ void UnitsManager_SetNewOrderInt(UnitInfo* unit, const UnitOrderType order, cons
 }
 
 void UnitsManager_SetNewOrder(UnitInfo* unit, const UnitOrderType order, const UnitOrderStateType state) {
+    ORDER_LOG_ISSUER();
+
     UnitsManager_SetNewOrderInt(unit, order, state);
 
     if (Remote_IsNetworkGame) {
@@ -2357,6 +2434,12 @@ void UnitsManager_DestroyUnit(UnitInfo* unit, bool count_casualty) {
         }
     }
 
+    // the temporary tape of an open build site selection belongs to the selecting unit
+    if (GameManager_TempTape != nullptr && GameManager_TempTape->GetParent() == unit) {
+        UnitsManager_DestroyUnit(&*GameManager_TempTape);
+        GameManager_TempTape = nullptr;
+    }
+
     if (unit->GetPriorOrder() == ORDER_FIRE && unit->GetPriorOrderState() != ORDER_STATE_INIT) {
         unit->UpdatePinCount(unit->fire_on_grid_x, unit->fire_on_grid_y, -1);
     }
@@ -2544,7 +2627,9 @@ void UnitsManager_FinishUnitScaling(UnitInfo* unit) {
     if (unit->GetOrder() == ORDER_IDLE) {
         SmartPointer<UnitInfo> parent = unit->GetParent();
 
-        if (parent->storage < parent->GetBaseValues()->GetAttribute(ATTRIB_STORAGE) && parent->team == unit->team) {
+        // a container destroyed during the shrink was cleared without the unit, which comes back out on its cell
+        if (Access_CanReceiveUnits(&*parent) &&
+            parent->storage < parent->GetBaseValues()->GetAttribute(ATTRIB_STORAGE) && parent->team == unit->team) {
             unit->SetOrder(ORDER_AWAIT);
 
             Access_UpdateMapStatus(unit, false);
@@ -2563,6 +2648,10 @@ void UnitsManager_FinishUnitScaling(UnitInfo* unit) {
             }
 
         } else {
+            if (!Access_CanReceiveUnits(&*parent)) {
+                unit->SetParent(nullptr);
+            }
+
             unit->SetOrder(ORDER_AWAIT);
             unit->SetOrderState(ORDER_STATE_EXECUTING_ORDER);
 
@@ -2763,8 +2852,10 @@ void UnitsManager_ProcessOrderMove(UnitInfo* unit) {
 
             } else {
                 if (!unit->IsBridgeElevated()) {
-                    UnitsManager_GroundCoverUnits.Remove(*unit);
-                    unit->AddToDrawList(STATIONARY | UPGRADABLE | SELECTABLE);
+                    // a bridge raised again before its lowering finished is still in the stationary list
+                    if (UnitsManager_GroundCoverUnits.Remove(*unit)) {
+                        unit->AddToDrawList(STATIONARY | UPGRADABLE | SELECTABLE);
+                    }
                 }
 
                 unit->DrawSpriteFrame(unit->GetImageIndex() + 1);
@@ -2780,8 +2871,10 @@ void UnitsManager_ProcessOrderMove(UnitInfo* unit) {
                     unit->DrawSpriteFrame(unit->GetImageIndex() - 1);
 
                 } else {
-                    UnitsManager_StationaryUnits.Remove(*unit);
-                    unit->AddToDrawList();
+                    if (UnitsManager_StationaryUnits.Remove(*unit)) {
+                        unit->AddToDrawList();
+                    }
+
                     UnitsManager_SetNewOrderInt(unit, ORDER_AWAIT, ORDER_STATE_EXECUTING_ORDER);
                 }
             }
@@ -3023,14 +3116,11 @@ void UnitsManager_ProcessOrderUnload(UnitInfo* unit) {
             unit->moved = 0;
             unit->SetOrderState(ORDER_STATE_UNLOADING_IN_PROGRESS);
 
-            const Point site{unit->grid_x, unit->grid_y};
-
-            if (Paths_IsSiteReserved(site) || Paths_IsOccupied(unit->grid_x, unit->grid_y, 0, unit->team)) {
+            if (UnitsManager_IsUnloadSiteTaken(unit) || Paths_IsOccupied(unit->grid_x, unit->grid_y, 0, unit->team)) {
                 unit->SetOrder(ORDER_AWAIT);
                 unit->SetOrderState(ORDER_STATE_EXECUTING_ORDER);
 
             } else {
-                Paths_ReserveSite(site);
                 UnitsManager_ProgressUnloading(unit);
             }
         } break;
@@ -3069,6 +3159,11 @@ void UnitsManager_ProcessOrderSentry(UnitInfo* unit) {
 
 void UnitsManager_ProcessOrderLand(UnitInfo* unit) {
     Ai_SetTasksPendingFlag("Landing");
+
+    // an engaged aircraft holds its descent into a hangar, a landing pad keeps it on the map
+    if (unit->GetParent() && UnitsManager_IsEngaged(unit)) {
+        return;
+    }
 
     switch (unit->GetOrderState()) {
         case ORDER_STATE_INIT: {
@@ -3116,12 +3211,15 @@ void UnitsManager_ProcessOrderLoad(UnitInfo* unit) {
 
     switch (unit->GetOrderState()) {
         case ORDER_STATE_INIT: {
-            unit->moved = 0;
-            unit->SetOrderState(ORDER_STATE_LOADING_IN_PROGRESS);
+            // an engaged passenger is not picked up until the attack or stealth action is over
+            if (!UnitsManager_IsEngaged(unit->GetParent())) {
+                unit->moved = 0;
+                unit->SetOrderState(ORDER_STATE_LOADING_IN_PROGRESS);
 
-            UnitsManager_ScaleUnit(unit->GetParent(), ORDER_STATE_SHRINK);
+                UnitsManager_ScaleUnit(unit->GetParent(), ORDER_STATE_SHRINK);
 
-            UnitsManager_ProgressLoading(unit);
+                UnitsManager_ProgressLoading(unit);
+            }
         } break;
 
         case ORDER_STATE_LOADING_IN_PROGRESS: {
@@ -3274,6 +3372,11 @@ void UnitsManager_ProcessOrderLayMine(UnitInfo* unit) {
 }
 
 void UnitsManager_ProcessOrder(UnitInfo* unit) {
+    if (unit->shake_effect_state && !UnitsManager_IsEngagedByInfiltrator(unit)) {
+        // the infiltrator that shook the unit died or left its stealth action before the shake cycle ended
+        unit->FinishShakeSabotage();
+    }
+
     if ((unit->flags & SPINNING_TURRET) && unit->GetOrder() != ORDER_DISABLE &&
         ResourceManager_GetSettings()->GetNumericValue("effects")) {
         unit->SpinningTurretAdvanceAnimation();
@@ -3448,7 +3551,13 @@ bool UnitsManager_IsFactory(ResourceID unit_type) {
 
 void UnitsManager_AddToDelayedReactionList(UnitInfo* unit) {
     if (!ResourceManager_GetSettings()->GetNumericValue("disable_fire")) {
-        UnitsManager_DelayedAttackTargets[unit->team].PushBack(*unit);
+        auto& targets = UnitsManager_DelayedAttackTargets[unit->team];
+
+        // a unit is listed once so that removing it when it dies or changes team takes it out
+        if (targets.Find(*unit) == targets.End()) {
+            targets.PushBack(*unit);
+        }
+
         UnitsManager_DelayedReactionsPending = true;
     }
 }
@@ -3696,17 +3805,19 @@ void UnitsManager_BuildClearing(UnitInfo* unit, bool mode) {
         }
     }
 
+    SmartList<UnitInfo> stranded_units;
+
     if ((unit_flags & (MOBILE_AIR_UNIT | MOBILE_LAND_UNIT | STATIONARY)) && !(unit->flags & HOVERING)) {
         Access_DestroyGroundCovers(unit);
 
         if (unit->flags & BUILDING) {
-            Access_ValidateUnitsOnTerrain(unit_grid_x, unit_grid_y, unit);
-            Access_ValidateUnitsOnTerrain(unit_grid_x + 1, unit_grid_y, unit);
-            Access_ValidateUnitsOnTerrain(unit_grid_x, unit_grid_y + 1, unit);
-            Access_ValidateUnitsOnTerrain(unit_grid_x + 1, unit_grid_y + 1, unit);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x, unit_grid_y, unit, &stranded_units);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x + 1, unit_grid_y, unit, &stranded_units);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x, unit_grid_y + 1, unit, &stranded_units);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x + 1, unit_grid_y + 1, unit, &stranded_units);
 
         } else {
-            Access_ValidateUnitsOnTerrain(unit_grid_x, unit_grid_y, unit);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x, unit_grid_y, unit, &stranded_units);
         }
     }
 
@@ -3794,6 +3905,19 @@ void UnitsManager_BuildClearing(UnitInfo* unit, bool mode) {
         rubble_unit->storage = cargo_amount;
     }
 
+    // stranded units are cleared once this unit is gone, a unit in transit may be listed twice
+    for (auto it = stranded_units.Begin(), it_end = stranded_units.End(); it != it_end; ++it) {
+        if ((*it).hits > 0) {
+            if ((*it).GetUnitType() == LANDMINE || (*it).GetUnitType() == SEAMINE) {
+                // a sunken mine does not detonate
+                UnitsManager_DestroyUnit(it->Get(), true);
+
+            } else {
+                UnitsManager_BuildClearing(it->Get(), true);
+            }
+        }
+    }
+
     GameManager_RenderMinimapDisplay = true;
 }
 
@@ -3821,9 +3945,12 @@ void UnitsManager_ActivateUnit(UnitInfo* unit) {
 
     SDL_assert(client.Get());
 
+    // the square was open when it was chosen, another unit may have taken it since
     if (((client->flags & MOBILE_AIR_UNIT) && client->speed > 0) ||
         (!Paths_IsOccupied(unit->move_to_grid_x, unit->move_to_grid_y, 0, unit->team) &&
-         !(client->flags & MOBILE_AIR_UNIT))) {
+         !(client->flags & MOBILE_AIR_UNIT) &&
+         Access_IsAccessible(client->GetUnitType(), unit->team, unit->move_to_grid_x, unit->move_to_grid_y,
+                             AccessModifier_SameClassBlocks))) {
         SDL_assert(unit->storage > 0);
 
         --unit->storage;
@@ -4055,14 +4182,30 @@ void UnitsManager_ProgressUnloading(UnitInfo* unit) {
 
         unit->SetOrderState(ORDER_STATE_FINISH_UNLOADING);
 
-        const Point site{client->grid_x, client->grid_y};
-
-        Paths_RemoveSiteReservation(site);
-
         if (GameManager_SelectedUnit == unit) {
             GameManager_UpdateInfoDisplay(unit);
         }
     }
+}
+
+bool UnitsManager_IsUnloadSiteTaken(UnitInfo* unit) {
+    // the unit lowered by another air transport occupies the site only once it is placed
+    for (auto it = UnitsManager_MobileAirUnits.Begin(), it_end = UnitsManager_MobileAirUnits.End(); it != it_end;
+         ++it) {
+        if (it->Get() != unit && (*it).hits > 0 && (*it).grid_x == unit->grid_x && (*it).grid_y == unit->grid_y) {
+            // a disable or a hit animation only suspends the unloading
+            const bool is_suspended =
+                ((*it).GetOrder() == ORDER_DISABLE || (*it).GetOrder() == ORDER_EXPLODE) &&
+                (*it).GetPriorOrder() == ORDER_UNLOAD && (*it).GetPriorOrderState() == ORDER_STATE_UNLOADING_IN_PROGRESS;
+
+            if (((*it).GetOrder() == ORDER_UNLOAD && (*it).GetOrderState() == ORDER_STATE_UNLOADING_IN_PROGRESS) ||
+                is_suspended) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 void UnitsManager_StartClearing(UnitInfo* unit) {
@@ -4103,6 +4246,11 @@ void UnitsManager_StartClearing(UnitInfo* unit) {
 }
 
 void UnitsManager_ProgressLoading(UnitInfo* unit) {
+    // a passenger engaged during the descent stays on the map, the transporter holds until it is free
+    if (UnitsManager_IsEngaged(unit->GetParent())) {
+        return;
+    }
+
     if (unit->Land()) {
         UnitValues* base_values = unit->GetBaseValues();
         SmartPointer<UnitInfo> parent(unit->GetParent());
@@ -4218,7 +4366,7 @@ bool UnitsManager_AttemptStealthAction(UnitInfo* unit) {
     int32_t stealth_chance = UnitsManager_GetStealthChancePercentage(unit, &*parent, unit->GetOrder());
     bool result;
 
-    if (unit->team == parent->team) {
+    if (!UnitsManager_IsValidStealthTarget(unit, &*parent, unit->GetOrder())) {
         result = false;
 
     } else {
@@ -4612,7 +4760,8 @@ bool UnitsManager_ShouldAttack(UnitInfo* unit1, UnitInfo* unit2) {
                 result = false;
 
             } else if (UnitsManager_TeamInfo[unit1->team].team_type == TEAM_TYPE_COMPUTER) {
-                result = Ai_IsTargetTeam(unit1, unit2);
+                // computer players treat every other team as hostile
+                result = true;
 
             } else {
                 if (GameManager_PlayMode == PLAY_MODE_TURN_BASED || unit1->GetOrder() == ORDER_SENTRY) {

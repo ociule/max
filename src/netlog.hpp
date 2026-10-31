@@ -22,9 +22,16 @@
 #ifndef NETLOG_HPP
 #define NETLOG_HPP
 
+/* Network log of debug builds: network events and packets, recorded into the AI log. Release builds compile every
+ * hook to nothing.
+ */
+
+#if !defined(NDEBUG)
+
 #include <format>
 
 #include "ailog.hpp"
+#include "taskdebugger.hpp"
 #include "transport.hpp"
 
 class NetLog {
@@ -72,14 +79,17 @@ public:
     inline void Log(NetPacket& packet) noexcept { ProcessLog(packet); }
 };
 
-#if !defined(NDEBUG)
 #define NETLOG(log, ...) NetLog log(__FILE__, __func__, __VA_ARGS__)
 #define NETLOG_LOG(log, ...) (log).Log(__VA_ARGS__)
+
+/* starts the task log as the in game toggle does, task debug info included */
+inline void NetLog_Enable() noexcept { TaskDebugger_EnableTaskLog(); }
+
 #else
+
 #define NETLOG(log, ...)
 #define NETLOG_LOG(log, ...)
-#endif /* !defined(NDEBUG) */
 
-inline void NetLog_Enable() noexcept { AiLog_Open(); }
+#endif /* !defined(NDEBUG) */
 
 #endif /* NETLOG_HPP */

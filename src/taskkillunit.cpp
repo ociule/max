@@ -32,6 +32,7 @@
 #include "taskattack.hpp"
 #include "taskmove.hpp"
 #include "taskrepair.hpp"
+#include "taskwaittoattack.hpp"
 #include "ticktimer.hpp"
 #include "unit.hpp"
 #include "units_manager.hpp"
@@ -51,11 +52,11 @@ TaskKillUnit::TaskKillUnit(TaskAttack* task_attack, SpottedUnit* spotted_unit_, 
     } else {
         required_damage = 1;
     }
-
-    projected_damage = 0;
 }
 
 TaskKillUnit::~TaskKillUnit() {}
+
+void TaskKillUnit::HoldRecruitsThisTurn() { recruit_turn = GameManager_TurnCounter + 1; }
 
 int32_t TaskKillUnit::GetProjectedDamage(UnitInfo* attacker, UnitInfo* target) {
     int32_t damage_potential =
@@ -179,7 +180,7 @@ bool TaskKillUnit::GetNewUnits() {
             }
         }
 
-        if (hits > projected_damage) {
+        if (hits > GetProjectedDamage() && GameManager_TurnCounter >= recruit_turn && IsAttackShareLeft()) {
             if (seek_target) {
                 SmartPointer<UnitInfo> unit1;
                 SmartPointer<UnitInfo> unit2;
@@ -242,14 +243,14 @@ bool TaskKillUnit::GetNewUnits() {
                         }
                     }
 
-                } while (unit1 && hits > projected_damage);
+                } while (unit1 && hits > GetProjectedDamage() && IsAttackShareLeft());
 
                 delete map;
 
                 seek_target = false;
             }
 
-            if (hits > projected_damage) {
+            if (hits > GetProjectedDamage() && IsAttackShareLeft()) {
                 if (!unit_requests) {
                     if (!is_found) {
                         FindVaildTypes();
@@ -274,7 +275,7 @@ bool TaskKillUnit::GetNewUnits() {
                         }
                     }
 
-                    remaining_hits = hits - projected_damage;
+                    remaining_hits = hits - GetProjectedDamage();
 
                     do {
                         unit_type = table.RollUnitType();
@@ -328,34 +329,17 @@ bool TaskKillUnit::GetNewUnits() {
 
 UnitInfo* TaskKillUnit::FindClosestCombatUnit(SmartList<UnitInfo>* units_, UnitInfo* unit, int32_t* distance,
                                               TransporterMap* map) {
-    uint32_t task_priority = GetPriority();
-    bool is_found;
+    uint16_t task_priority = GetPriority();
 
     for (auto it = units_->Begin(), it_end = units_->End(); it != it_end; ++it) {
-        if ((*it).team == m_team && (*it).hits > 0 && (*it).ammo > 0) {
-            if ((*it).GetOrder() == ORDER_AWAIT || (*it).GetOrder() == ORDER_SENTRY || (*it).GetOrder() == ORDER_MOVE ||
-                (*it).GetOrder() == ORDER_MOVE_TO_UNIT) {
-                is_found = false;
+        if ((*it).ammo > 0 && Task_IsRecruitable(it->Get(), m_team, task_priority)) {
+            if (IsUnitSuitable(*it)) {
+                if (!map || map->Search(Point((*it).grid_x, (*it).grid_y))) {
+                    int32_t distance_ = Access_GetSquaredDistance(it->Get(), spotted_unit->GetLastPosition());
 
-                if ((*it).GetTask()) {
-                    if ((*it).GetTask()->ComparePriority(task_priority) > 0) {
-                        is_found = (*it).GetTask()->IsUnitTransferable(*it);
-                    }
-
-                } else {
-                    is_found = true;
-                }
-
-                if (is_found) {
-                    if (IsUnitUsable(*it)) {
-                        if (!map || map->Search(Point((*it).grid_x, (*it).grid_y))) {
-                            int32_t distance_ = Access_GetSquaredDistance(it->Get(), spotted_unit->GetLastPosition());
-
-                            if (!unit || *distance > distance_) {
-                                unit = it->Get();
-                                *distance = distance_;
-                            }
-                        }
+                    if (!unit || *distance > distance_) {
+                        unit = it->Get();
+                        *distance = distance_;
                     }
                 }
             }
@@ -375,7 +359,12 @@ bool TaskKillUnit::GiveOrdersToUnit(UnitInfo* unit) {
               ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data());
 
         if (spotted_unit && unit->ammo >= unit->GetBaseValues()->GetAttribute(ATTRIB_ROUNDS)) {
-            result = dynamic_cast<TaskAttack*>(&*m_parent)->MoveCombatUnit(this, unit);
+            if (SabotageTarget(unit)) {
+                result = true;
+
+            } else {
+                result = dynamic_cast<TaskAttack*>(&*m_parent)->MoveCombatUnit(this, unit);
+            }
 
         } else {
             if (spotted_unit) {
@@ -398,13 +387,157 @@ bool TaskKillUnit::GiveOrdersToUnit(UnitInfo* unit) {
     return result;
 }
 
-bool TaskKillUnit::IsUnitUsable(UnitInfo& unit) {
+bool TaskKillUnit::SabotageTarget(UnitInfo* unit) {
+    UnitInfo* target = spotted_unit->GetUnit();
+    bool result = false;
+
+    // a disabled target neither moves nor fires, so an infiltrator goes for it itself instead of waiting until it is
+    // the one chosen among the targets around, and has a square next to it cleared that only our own units take
+    if (unit->GetUnitType() == COMMANDO && target->GetOrder() == ORDER_DISABLE &&
+        AiAttack_IsValidSabotageTarget(unit, target)) {
+        if (Task_IsAdjacent(target, unit->grid_x, unit->grid_y)) {
+            if (unit->shots > 0) {
+                AILOG(log, "Kill {}: {} next to the target.",
+                      ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(),
+                      ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data());
+
+                if (target->AreTherePins()) {
+                    SmartPointer<Task> wait_to_attack_task(new (std::nothrow) TaskWaitToAttack(unit));
+
+                    TaskManager.AppendTask(*wait_to_attack_task);
+
+                } else {
+                    AiAttack_ProcessAttack(unit, target);
+                }
+
+            } else {
+                // without a shot left the infiltrator waits next to the target, unless it is in danger there
+                Task_RetreatFromDanger(this, unit, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
+            }
+
+            result = true;
+
+        } else {
+            int32_t reach = unit->GetBaseValues()->GetAttribute(ATTRIB_SPEED) + 1;
+
+            if (Access_GetSquaredDistance(unit, target) <= reach * reach) {
+                Point site;
+                int32_t projected_damage;
+
+                if (AiAttack_ChooseSiteToSabotage(unit, target, &site, &projected_damage,
+                                                  CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE)) {
+                    if (projected_damage < unit->hits) {
+                        AILOG(log, "Kill {}: move {} next to the target at [{},{}].",
+                              ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(),
+                              ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(), site.x + 1,
+                              site.y + 1);
+
+                        SmartPointer<TaskMove> move_task(new (std::nothrow) TaskMove(
+                            unit, this, 0, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, site, &MoveFinishedCallback));
+
+                        unit->attack_site = site;
+
+                        TaskManager.AppendTask(*move_task);
+
+                        result = true;
+                    }
+
+                } else {
+                    ClearSiteToSabotage(unit, target);
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+void TaskKillUnit::ClearSiteToSabotage(UnitInfo* unit, UnitInfo* target) {
+    if (!zone) {
+        Rect bounds;
+        Point site;
+        Point best_site;
+        int32_t distance;
+        int32_t minimum_distance{INT32_MAX};
+
+        rect_init(&bounds, 0, 0, ResourceManager_MapSize.x, ResourceManager_MapSize.y);
+
+        // the clear zone task moves away units that await orders, so only a square that such a unit of ours takes
+        // and nothing else blocks can be freed; infiltrators are left alone, they may be after a target of their own
+        for (int32_t direction = 0; direction < DIRECTION_COUNT; ++direction) {
+            site.x = target->grid_x + DIRECTION_OFFSETS[direction].x;
+            site.y = target->grid_y + DIRECTION_OFFSETS[direction].y;
+
+            if (Access_IsInsideBounds(&bounds, &site) &&
+                Access_IsAccessible(unit->GetUnitType(), m_team, site.x, site.y, AccessModifier_EnemySameClassBlocks)) {
+                UnitInfo* blocker = Access_GetTeamUnit(site.x, site.y, m_team, MOBILE_SEA_UNIT | MOBILE_LAND_UNIT);
+
+                if (blocker && blocker->GetUnitType() != COMMANDO &&
+                    (blocker->GetOrder() == ORDER_AWAIT || blocker->GetOrder() == ORDER_SENTRY) &&
+                    Task_IsReadyToTakeOrders(blocker)) {
+                    distance = Access_GetSquaredDistance(unit, site);
+
+                    if (distance < minimum_distance) {
+                        best_site = site;
+                        minimum_distance = distance;
+                    }
+                }
+            }
+        }
+
+        if (minimum_distance != INT32_MAX) {
+            AILOG(log, "Kill {}: clear [{},{}] next to the target for {}.",
+                  ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(), best_site.x + 1,
+                  best_site.y + 1, ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data());
+
+            zone = new (std::nothrow) Zone(unit, this);
+
+            zone->Add(&best_site);
+
+            AiPlayer_Teams[m_team].ClearZone(&*zone);
+        }
+    }
+}
+
+bool TaskKillUnit::IsUnitUsable(UnitInfo& unit) { return IsUnitSuitable(unit) && IsAttackShareLeft(); }
+
+bool TaskKillUnit::IsAttackShareLeft() {
+    TaskAttack* attack = dynamic_cast<TaskAttack*>(m_parent.Get());
+
+    // an attack draws units up to its share of the team's military value
+    return !attack || attack->GetUnitValue() < AiPlayer_Teams[m_team].GetAttackValueShare();
+}
+
+void TaskKillUnit::UpdateDemand() {
+    UnitInfo* target = spotted_unit->GetUnit();
+    TaskAttack* attack = dynamic_cast<TaskAttack*>(m_parent.Get());
+    int32_t wanted;
+
+    if (target->GetBaseValues()->GetAttribute(ATTRIB_AMMO) > 0 && target->team != PLAYER_TEAM_ALIEN) {
+        required_damage = target->hits;
+        wanted = 2 * target->hits;
+
+    } else {
+        required_damage = 1;
+        wanted = target->hits;
+    }
+
+    // the fire of the defenders counts once per attack, so only its current target recruits for it
+    if (attack && attack->IsCurrentTarget(this)) {
+        wanted += attack->GetDefendersFire();
+    }
+
+    // the margin makes up for losses the fire estimate misses
+    hits = std::min<int32_t>((wanted * 5) / 4, INT16_MAX);
+}
+
+bool TaskKillUnit::IsUnitSuitable(UnitInfo& unit) {
     bool result;
 
-    if (spotted_unit && unit.GetBaseValues()->GetAttribute(ATTRIB_ROUNDS) > 0 &&
+    if (spotted_unit && GameManager_TurnCounter >= recruit_turn && unit.GetBaseValues()->GetAttribute(ATTRIB_ROUNDS) > 0 &&
         unit.ammo >= unit.GetBaseValues()->GetAttribute(ATTRIB_ROUNDS) && managed_unit != unit) {
         if (weight_table.GetWeight(unit.GetUnitType())) {
-            result = hits > projected_damage;
+            result = hits > GetProjectedDamage();
 
         } else {
             result = false;
@@ -436,6 +569,7 @@ std::string TaskKillUnit::WriteStatusLog() const {
             std::format("Kill {} at [{},{}]",
                         ResourceManager_GetUnit(spotted_unit->GetUnit()->GetUnitType()).GetSingularName().data(),
                         spotted_unit->GetLastPositionX() + 1, spotted_unit->GetLastPositionY() + 1);
+        int32_t projected_damage = GetProjectedDamage();
 
         if (required_damage > projected_damage) {
             result += std::format(" ({} points needed)", required_damage - projected_damage);
@@ -466,7 +600,9 @@ Rect* TaskKillUnit::GetBounds(Rect* bounds) {
 
 uint8_t TaskKillUnit::GetType() const { return TaskType_TaskKillUnit; }
 
-bool TaskKillUnit::IsNeeded() { return hits > projected_damage && spotted_unit && spotted_unit->GetUnit()->hits > 0; }
+bool TaskKillUnit::IsNeeded() {
+    return hits > GetProjectedDamage() && spotted_unit && spotted_unit->GetUnit()->hits > 0;
+}
 
 void TaskKillUnit::AddUnit(UnitInfo& unit) {
     AILOG(log, "Kill {}: Add {}.",
@@ -474,8 +610,12 @@ void TaskKillUnit::AddUnit(UnitInfo& unit) {
                        : "unit",
           ResourceManager_GetUnit(unit.GetUnitType()).GetSingularName().data());
 
-    if (spotted_unit) {
-        projected_damage += GetProjectedDamage(&unit, spotted_unit->GetUnit());
+    if (units.Find(unit) != units.End()) {
+        // a unit is counted once, with the damage it joined with
+        AILOG_LOG(log, "unit already added.");
+
+    } else if (spotted_unit) {
+        unit_damages.push_back({unit, GetProjectedDamage(&unit, spotted_unit->GetUnit())});
 
         unit.AddTask(this);
         units.PushBack(unit);
@@ -504,6 +644,14 @@ void TaskKillUnit::BeginTurn() {
         managed_unit = nullptr;
 
         position = spotted_unit->GetLastPosition();
+
+        // a target added within reach keeps to the units on site, the others weigh their target anew and look for
+        // units every turn
+        if (GameManager_TurnCounter >= recruit_turn) {
+            UpdateDemand();
+
+            seek_target = true;
+        }
 
         GetNewUnits();
         MoveUnits();
@@ -539,7 +687,7 @@ bool TaskKillUnit::Execute(UnitInfo& unit) {
               ResourceManager_GetUnit(unit.GetUnitType()).GetSingularName().data());
 
         if (unit.IsReadyForOrders(this) && unit.speed > 0) {
-            if (unit.hits < unit.GetBaseValues()->GetAttribute(ATTRIB_HITS) / 4) {
+            if (Task_IsRepairDue(&unit, false)) {
                 unit.RemoveTasks();
 
                 SmartPointer<Task> repair_task(new (std::nothrow) TaskRepair(&unit));
@@ -591,7 +739,9 @@ void TaskKillUnit::RemoveSelf() {
         }
 
         managed_unit = nullptr;
+        zone = nullptr;
         units.Clear();
+        unit_damages.clear();
 
         TaskManager.RemoveTask(*this);
     }
@@ -609,8 +759,16 @@ void TaskKillUnit::RemoveUnit(UnitInfo& unit) {
 
     units.Remove(unit);
 
-    if (spotted_unit) {
-        projected_damage -= GetProjectedDamage(&unit, spotted_unit->GetUnit());
+    if (zone && zone->unit == unit) {
+        zone = nullptr;
+    }
+
+    // the unit takes back exactly the damage it was counted with when it joined
+    for (auto it = unit_damages.begin(); it != unit_damages.end(); ++it) {
+        if (it->unit == unit) {
+            unit_damages.erase(it);
+            break;
+        }
     }
 
     if (m_parent) {
@@ -624,6 +782,13 @@ void TaskKillUnit::RemoveUnit(UnitInfo& unit) {
 
 void TaskKillUnit::EventUnitDestroyed(UnitInfo& unit) {
     if (GetUnitSpotted() == &unit) {
+        TaskAttack* attack = dynamic_cast<TaskAttack*>(m_parent.Get());
+
+        // the attack keeps the units that can strike one of its targets this turn
+        if (attack) {
+            attack->PressOn(*this);
+        }
+
         for (auto it = units.Begin(), it_end = units.End(); it != it_end; ++it) {
             TaskManager.ClearUnitTasksAndRemindAvailable(it->Get(), true);
         }
@@ -635,6 +800,21 @@ void TaskKillUnit::EventUnitDestroyed(UnitInfo& unit) {
 }
 
 void TaskKillUnit::EventEnemyUnitSpotted(UnitInfo& unit) {}
+
+void TaskKillUnit::EventZoneCleared(Zone* zone_, bool status) {
+    if (zone == zone_) {
+        zone = nullptr;
+
+        // the infiltrator goes on to the square cleared for it
+        if (status && spotted_unit && zone_->unit->GetTask() == this) {
+            AILOG(log, "Kill {}: square cleared for {}.",
+                  ResourceManager_GetUnit(spotted_unit->GetUnit()->GetUnitType()).GetSingularName().data(),
+                  ResourceManager_GetUnit(zone_->unit->GetUnitType()).GetSingularName().data());
+
+            Task_RemindMoveFinished(&*zone_->unit, true);
+        }
+    }
+}
 
 int32_t TaskKillUnit::GetTotalProjectedDamage() {
     int32_t result = 0;
@@ -678,4 +858,12 @@ SmartList<UnitInfo>& TaskKillUnit::GetUnits() { return units; }
 
 uint16_t TaskKillUnit::GetRequiredDamage() const { return required_damage; }
 
-uint16_t TaskKillUnit::GetProjectedDamage() const { return projected_damage; }
+int32_t TaskKillUnit::GetProjectedDamage() const {
+    int32_t result = 0;
+
+    for (const auto& unit_damage : unit_damages) {
+        result += unit_damage.damage;
+    }
+
+    return result;
+}

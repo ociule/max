@@ -42,6 +42,8 @@
 
 class TaskManager TaskManager;
 
+static bool TaskManager_IsReadyToReact(UnitInfo* unit);
+
 TaskManager::TaskManager() : reminder_counter(0) {}
 
 TaskManager::~TaskManager() {}
@@ -153,29 +155,48 @@ void TaskManager::CheckComputerReactions() {
             }
 
             if (Ai_GetReactionState() == AI_REACTION_STATE_IDLE) {
-                for (auto it = units_to_check.Begin(), it_end = units_to_check.End(); it != it_end; ++it) {
-                    if (GameManager_IsActiveTurn((*it).team) && (*it).hits > 0 && (*it).speed > 0 &&
-                        Task_IsReadyToTakeOrders(it->Get()) &&
-                        UnitsManager_TeamInfo[(*it).team].team_type == TEAM_TYPE_COMPUTER) {
-                        if ((*it).GetTask()) {
-                            Task_RetreatFromDanger((*it).GetTask(), it->Get(), Ai_DetermineCautionLevel(it->Get()));
+                // a waiting check goes back to the reminders once its unit can act or is no longer ours to check
+                for (auto it = units_awaiting_reaction.Begin(), it_end = units_awaiting_reaction.End(); it != it_end;
+                     ++it) {
+                    if ((*it).hits == 0 || UnitsManager_TeamInfo[(*it).team].team_type != TEAM_TYPE_COMPUTER ||
+                        TaskManager_IsReadyToReact(it->Get())) {
+                        AppendReminder(new (std::nothrow) RemindRetreat(*it), true);
 
-                        } else {
-                            Task_RetreatIfNecessary(nullptr, it->Get(), Ai_DetermineCautionLevel(it->Get()));
-                        }
-
-                        units_to_check.Remove(*it);
-
-                        if (!TickTimer_HaveTimeToThink()) {
-                            Ai_SetReactionState(AI_REACTION_STATE_PROCESSING);
-
-                            return;
-                        }
+                        units_awaiting_reaction.Remove(*it);
                     }
                 }
             }
         }
     }
+}
+
+void TaskManager::CheckUnitReaction(UnitInfo& unit) {
+    if (unit.hits > 0 && UnitsManager_TeamInfo[unit.team].team_type == TEAM_TYPE_COMPUTER) {
+        if (TaskManager_IsReadyToReact(&unit)) {
+            AILOG(log, "Reaction check for {} at [{},{}].",
+                  ResourceManager_GetUnit(unit.GetUnitType()).GetSingularName().data(), unit.grid_x + 1,
+                  unit.grid_y + 1);
+
+            unit.ChangeAiStateBits(UnitInfo::AI_STATE_RETREAT_REMINDER, false);
+
+            if (unit.GetTask()) {
+                Task_RetreatFromDanger(unit.GetTask(), &unit, Ai_DetermineCautionLevel(&unit));
+
+            } else {
+                Task_RetreatIfNecessary(nullptr, &unit, Ai_DetermineCautionLevel(&unit));
+            }
+
+        } else {
+            units_awaiting_reaction.PushBack(unit);
+        }
+
+    } else {
+        unit.ChangeAiStateBits(UnitInfo::AI_STATE_RETREAT_REMINDER, false);
+    }
+}
+
+static bool TaskManager_IsReadyToReact(UnitInfo* unit) {
+    return GameManager_IsActiveTurn(unit->team) && unit->speed > 0 && Task_IsReadyToTakeOrders(unit);
 }
 
 void TaskManager::CollectPotentialAttackTargets(UnitInfo* unit) {
@@ -190,7 +211,7 @@ void TaskManager::CollectPotentialAttackTargets(UnitInfo* unit) {
                 if ((*it).team != unit->team && (*it).IsVisibleToTeam(unit->team) &&
                     UnitsManager_TeamInfo[(*it).team].team_type == TEAM_TYPE_COMPUTER &&
                     Access_GetSquaredDistance(it->Get(), unit) <= range) {
-                    units_to_check.PushBack(*it);
+                    EnqueueUnitForReactionCheck(*it);
                 }
             }
         }
@@ -201,14 +222,20 @@ void TaskManager::CollectPotentialAttackTargets(UnitInfo* unit) {
                 if ((*it).team != unit->team && (*it).IsVisibleToTeam(unit->team) &&
                     UnitsManager_TeamInfo[(*it).team].team_type == TEAM_TYPE_COMPUTER &&
                     Access_GetSquaredDistance(it->Get(), unit) <= range) {
-                    units_to_check.PushBack(*it);
+                    EnqueueUnitForReactionCheck(*it);
                 }
             }
         }
     }
 }
 
-void TaskManager::EnqueueUnitForReactionCheck(UnitInfo& unit) { units_to_check.PushBack(unit); }
+void TaskManager::EnqueueUnitForReactionCheck(UnitInfo& unit) {
+    // one check pending per unit at most, and none for a unit that can never move
+    if (!(unit.GetAiStateBits() & UnitInfo::AI_STATE_RETREAT_REMINDER) &&
+        unit.GetBaseValues()->GetAttribute(ATTRIB_SPEED) > 0) {
+        AppendReminder(new (std::nothrow) RemindRetreat(unit), true);
+    }
+}
 
 void TaskManager::CreateBuilding(ResourceID unit_type, uint16_t team, Point site, Task* task) {
     if (IsUnitNeeded(unit_type, team, task->GetPriority())) {
@@ -319,6 +346,7 @@ void TaskManager::BeginTurn(uint16_t team) {
         }
     }
 
+#if !defined(NDEBUG)
     if (AiLog_IsEnabled()) {
         uint16_t reminders[REMINDER_TYPE_COUNT];
 
@@ -334,13 +362,14 @@ void TaskManager::BeginTurn(uint16_t team) {
         AILOG_LOG(log, "Move reminders: {}", reminders[REMINDER_TYPE_MOVE]);
         AILOG_LOG(log, "Attack reminders: {}", reminders[REMINDER_TYPE_ATTACK]);
     }
+#endif /* !defined(NDEBUG) */
 }
 
 void TaskManager::EndTurn(uint16_t team) {
     AILOG(log, "Task Manager: end turn.");
 
     for (auto it = tasks.Begin(), it_end = tasks.End(); it != it_end; ++it) {
-        if ((*it).GetTeam() == team) {
+        if ((*it).GetTeam() == team && (*it).IsEndTurnNeeded()) {
             (*it).RemindTurnEnd();
         }
     }
@@ -365,7 +394,7 @@ void TaskManager::Clear() {
     unit_requests.Clear();
     normal_reminders.Clear();
     priority_reminders.Clear();
-    units_to_check.Clear();
+    units_awaiting_reaction.Clear();
 
     reminder_counter = 0;
 }
@@ -397,6 +426,7 @@ void TaskManager::FindTaskForUnit(UnitInfo* unit) {
                 SmartPointer<TaskObtainUnits> obtain_units_task;
                 uint16_t task_priority{UINT16_MAX};
 
+#if !defined(NDEBUG)
                 if (AiLog_IsEnabled()) {
                     char unit_name[300];
 
@@ -404,6 +434,7 @@ void TaskManager::FindTaskForUnit(UnitInfo* unit) {
 
                     AILOG(log, "Task manager: find a task for {}.", unit_name);
                 }
+#endif /* !defined(NDEBUG) */
 
                 {
                     /* in case a builder unit is blocked from activating another unit is disabled
@@ -495,8 +526,9 @@ void TaskManager::FindTaskForUnit(UnitInfo* unit) {
 
                 for (auto it = unit_requests.Begin(), it_end = unit_requests.End(); it != it_end; ++it) {
                     if ((*it).GetTeam() == unit->team) {
+                        /* a request whose parent no longer needs units takes none, it drops itself at its turn end */
                         if ((!obtain_units_task || (*it).ComparePriority(task_priority) < 0) &&
-                            (*it).CountInstancesOfUnitType(unit->GetUnitType())) {
+                            (*it).CountInstancesOfUnitType(unit->GetUnitType()) && (*it).IsNeeded()) {
                             obtain_units_task = *it;
                             task_priority = obtain_units_task->GetPriority();
                         }

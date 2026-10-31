@@ -322,13 +322,24 @@ void TaskCreateBuilding::Finish() {
     // prevent early destruction of object
     SmartPointer<Task> create_building_task(this);
 
+    if (building && building->hits == 0) {
+        // a building that died before it was handed over never hands itself to the task
+        Abort();
+
+        return;
+    }
+
     if (building && building->GetOrder() != ORDER_IDLE && building->GetOrder() != ORDER_AWAIT_SCALING) {
         AddUnit(*building);
     }
 
     if (builder) {
         if (building) {
-            Activate();
+            // the builder needs an activation as long as it stands on the site; once it is off the site the task
+            // waits for the building, whose expansion hands it to the task
+            if (!TaskActivate_IsComplete(&*builder, &*building)) {
+                Activate();
+            }
 
             return;
         }
@@ -683,6 +694,12 @@ void TaskCreateBuilding::EndTurn() {
                op_state < CREATE_BUILDING_STATE_BUILDING && !tasks.GetCount()) {
         RequestBuilder();
     }
+}
+
+// without a builder the end turn only asks for one, unless it is already getting one
+bool TaskCreateBuilding::IsEndTurnNeeded() {
+    return builder || (unit_type != INVALID_ID && op_state != CREATE_BUILDING_STATE_GETTING_BUILDER &&
+                       op_state < CREATE_BUILDING_STATE_BUILDING && !tasks.GetCount());
 }
 
 bool TaskCreateBuilding::ExchangeOperator(UnitInfo& unit_) {

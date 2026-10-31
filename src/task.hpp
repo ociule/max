@@ -126,8 +126,13 @@ enum : uint16_t {
     TASK_PRIORITY_ESCORT = 0x0F00,                // unit escort and protection
     TASK_PRIORITY_ATTACK_MOBILE = 0x1000,         // attack escalated against mobile threats; also the fallback tier
                                                   // of a parentless TaskMove
-    TASK_PRIORITY_REPAIR = 0x1100,                // unit repair, reload and upgrade
-    TASK_PRIORITY_BUILDING_DEFENSE = 0x1200,      // defense turret construction
+
+    // 0x1100 plays two roles; both names denote the same tier
+    TASK_PRIORITY_REPAIR = 0x1100,          // tier: unit repair, reload and upgrade
+    TASK_PRIORITY_FOLLOW_DEFENSE = 0x1100,  // threshold: defense reserve units follow attackers this urgent, the
+                                            // attacks escalated against mobile threats near the team's buildings
+
+    TASK_PRIORITY_BUILDING_DEFENSE = 0x1200,  // defense turret construction
 
     // 0x1300 plays two roles; both names denote the same tier
     TASK_PRIORITY_BUILDING_HEAVY_PLANT = 0x1300,   // tier: first land/air/ship factory and training hall
@@ -138,10 +143,7 @@ enum : uint16_t {
     TASK_PRIORITY_BUILDING_UPGRADES = 0x1500,       // research facility construction
     TASK_PRIORITY_BUILDING_GREENHOUSE = 0x1600,     // greenhouse construction
     TASK_PRIORITY_ATTACK_PRIORITY_TARGET = 0x1700,  // attack escalated against GREENHSE/MININGST of a leading enemy
-
-    // 0x1800 plays two roles; both names denote the same tier
-    TASK_PRIORITY_BUILDING_EXPANSION = 0x1800,  // tier: strategy-driven factory expansion
-    TASK_PRIORITY_FOLLOW_DEFENSE = 0x1800,      // threshold: defense reserve units follow attackers this urgent
+    TASK_PRIORITY_BUILDING_EXPANSION = 0x1800,      // strategy-driven factory expansion
 
     TASK_PRIORITY_DEFENSE_RESERVE = 0x1900,   // defensive unit reserve
     TASK_PRIORITY_FRONTIER = 0x1A00,          // frontier mining and mine laying
@@ -176,6 +178,8 @@ bool Task_IsUnitDoomedToDestruction(UnitInfo* unit, int32_t caution_level);
 bool Task_RetreatIfNecessary(Task* task, UnitInfo* unit, int32_t caution_level);
 bool Task_RetreatFromDanger(Task* task, UnitInfo* unit, int32_t caution_level);
 bool Task_IsAdjacent(UnitInfo* unit, int16_t grid_x, int16_t grid_y);
+bool Task_IsRepairDue(UnitInfo* unit, bool is_lead_unit);
+bool Task_IsRecruitable(UnitInfo* unit, uint16_t team, uint16_t task_priority);
 int32_t Task_EstimateTurnsTillMissionEnd();
 int32_t Task_GetReadyUnitsCount(uint16_t team, ResourceID unit_type);
 
@@ -465,6 +469,16 @@ public:
      * turn.
      */
     virtual void EndTurn();
+
+    /**
+     * \brief Tells whether an end turn could do anything for the task right now.
+     *
+     * The end turn retries of a computer player remind every task of the team, a task that waits for a unit or a
+     * request has nothing to do there and is left out.
+     *
+     * \return true unless the task's end turn would do nothing.
+     */
+    virtual bool IsEndTurnNeeded();
 
     /**
      * \brief Attempts to exchange the operator of a building or complex unit.

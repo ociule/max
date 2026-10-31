@@ -1655,7 +1655,8 @@ void Access_DestroyGroundCovers(UnitInfo* unit) {
         if (units) {
             // the end node must be cached in case Hash_MapHash.Remove() deletes the list
             for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-                if (unit != it->Get()) {
+                // an exploding ground cover is cleared by its own explosion
+                if (unit != it->Get() && (*it).GetOrderState() != ORDER_STATE_DESTROY) {
                     switch ((*it).GetUnitType()) {
                         case ROAD:
                         case LANDPAD:
@@ -1670,7 +1671,8 @@ void Access_DestroyGroundCovers(UnitInfo* unit) {
     }
 }
 
-void Access_ValidateUnitsOnTerrain(int32_t grid_x, int32_t grid_y, const UnitInfo* destroyed_unit) {
+void Access_FindUnitsOnInvalidTerrain(int32_t grid_x, int32_t grid_y, const UnitInfo* destroyed_unit,
+                                      SmartList<UnitInfo>* stranded_units) {
     const auto units = Hash_MapHash[Point(grid_x, grid_y)];
 
     if (units) {
@@ -1709,9 +1711,9 @@ void Access_ValidateUnitsOnTerrain(int32_t grid_x, int32_t grid_y, const UnitInf
                 continue;
             }
 
-            // Landed aircraft require a landing pad - destroy if no landing pad present
+            // Landed aircraft require a landing pad - stranded if no landing pad present
             if ((unit->flags & MOBILE_AIR_UNIT) && !(unit->flags & HOVERING) && !has_landing_pad) {
-                UnitsManager_DestroyUnit(unit, true);
+                stranded_units->PushBack(*unit);
                 continue;
             }
 
@@ -1723,7 +1725,7 @@ void Access_ValidateUnitsOnTerrain(int32_t grid_x, int32_t grid_y, const UnitInf
 
             // Check if unit's land type is compatible with surface type
             if (!(unit_land_type & surface_type)) {
-                UnitsManager_DestroyUnit(unit, true);
+                stranded_units->PushBack(*unit);
             }
         }
     }
@@ -2114,7 +2116,7 @@ UnitInfo* Access_GetReceiverUnit(UnitInfo* unit, int32_t grid_x, int32_t grid_y)
         if (units) {
             // the end node must be cached in case Hash_MapHash.Remove() deletes the list
             for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-                if ((*it).team == team && (*it).GetOrder() != ORDER_IDLE) {
+                if ((*it).team == team && (*it).GetOrder() != ORDER_IDLE && Access_CanReceiveUnits(it->Get())) {
                     if (flags & MOBILE_LAND_UNIT) {
                         if (((*it).GetUnitType() == BARRACKS || (*it).GetUnitType() == CLNTRANS ||
                              (*it).GetUnitType() == SEATRANS) &&
@@ -2148,6 +2150,11 @@ UnitInfo* Access_GetReceiverUnit(UnitInfo* unit, int32_t grid_x, int32_t grid_y)
     }
 
     return result;
+}
+
+bool Access_CanReceiveUnits(const UnitInfo* receiver) {
+    // a destroyed or exploding unit takes nothing in, what it holds is destroyed with it
+    return receiver->hits > 0 && receiver->GetOrderState() != ORDER_STATE_DESTROY;
 }
 
 UnitInfo* Access_GetTeamBuilding(uint16_t team, int32_t grid_x, int32_t grid_y) {
