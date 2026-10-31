@@ -22,6 +22,7 @@
 #include "ai.hpp"
 
 #include "access.hpp"
+#include "aicontroller.hpp"
 #include "ailog.hpp"
 #include "aiplayer.hpp"
 #include "buildmenu.hpp"
@@ -120,34 +121,44 @@ bool Ai_SetupStrategy(uint16_t team) {
 }
 
 void Ai_SetInfoMapPoint(Point point, uint16_t team) {
-    if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
-        AiPlayer_Teams[team].SetInfoMapPoint(point);
+    AiController* controller = AiController_Get(team);
+
+    if (controller) {
+        controller->SetInfoMapPoint(point);
     }
 }
 
 void Ai_MarkMineMapPoint(Point point, uint16_t team) {
-    if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
-        AiPlayer_Teams[team].MarkMineMapPoint(point);
+    AiController* controller = AiController_Get(team);
+
+    if (controller) {
+        controller->MarkMineMapPoint(point);
     }
 }
 
 void Ai_UpdateMineMap(Point point, uint16_t team) {
-    if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
-        AiPlayer_Teams[team].UpdateMineMap(point);
+    AiController* controller = AiController_Get(team);
+
+    if (controller) {
+        controller->UpdateMineMap(point);
     }
 }
 
 void Ai_SetTasksPendingFlag(const char* event) {
     for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-        if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
-            AiPlayer_Teams[team].ChangeTasksPendingFlag(true);
+        AiController* controller = AiController_Get(team);
+
+        if (controller) {
+            controller->TasksPending(event);
         }
     }
 }
 
 void Ai_BeginTurn(uint16_t team) {
-    if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
-        AiPlayer_Teams[team].BeginTurn();
+    AiController* controller = AiController_Get(team);
+
+    if (controller) {
+        controller->BeginTurn();
     }
 }
 
@@ -165,16 +176,20 @@ void Ai_FileLoad(SmartFileReader& file) {
     Ai_Init();
 
     for (uint16_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-        if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
-            AiPlayer_Teams[team].FileLoad(file);
+        AiController* controller = AiController_Get(team);
+
+        if (controller) {
+            controller->FileLoad(file);
         }
     }
 }
 
 void Ai_FileSave(SmartFileWriter& file) {
     for (uint16_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-        if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
-            AiPlayer_Teams[team].FileSave(file);
+        AiController* controller = AiController_Get(team);
+
+        if (controller) {
+            controller->FileSave(file);
         }
     }
 }
@@ -240,9 +255,11 @@ void Ai_UpdateTerrainDistanceField(UnitInfo* unit) {
 void Ai_CheckEndTurn() {
     if (GameManager_PlayMode == PLAY_MODE_TURN_BASED) {
         if (GameManager_GameState == GAME_STATE_8_IN_GAME) {
-            if (UnitsManager_TeamInfo[GameManager_ActiveTurnTeam].team_type == TEAM_TYPE_COMPUTER) {
+            AiController* controller = AiController_Get(GameManager_ActiveTurnTeam);
+
+            if (controller) {
                 if (!UnitsManager_TeamInfo[GameManager_ActiveTurnTeam].finished_turn) {
-                    AiPlayer_Teams[GameManager_ActiveTurnTeam].CheckEndTurn();
+                    controller->CheckEndTurn();
                 }
             }
         }
@@ -250,9 +267,11 @@ void Ai_CheckEndTurn() {
     } else {
         if (GameManager_GameState == GAME_STATE_9_END_TURN || GameManager_GameState == GAME_STATE_8_IN_GAME) {
             for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-                if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
+                AiController* controller = AiController_Get(team);
+
+                if (controller) {
                     if (!UnitsManager_TeamInfo[team].finished_turn) {
-                        if (AiPlayer_Teams[team].CheckEndTurn()) {
+                        if (controller->CheckEndTurn()) {
                             return;
                         }
                     }
@@ -260,7 +279,7 @@ void Ai_CheckEndTurn() {
             }
 
             if (GameManager_GameState == GAME_STATE_8_IN_GAME) {
-                if (UnitsManager_TeamInfo[GameManager_ActiveTurnTeam].team_type == TEAM_TYPE_COMPUTER) {
+                if (AiController_Get(GameManager_ActiveTurnTeam)) {
                     if (UnitsManager_TeamInfo[GameManager_ActiveTurnTeam].finished_turn) {
                         AILOG(log, "Error- had to force ENDTURN!");
                         GameManager_GameState = GAME_STATE_9_END_TURN;
@@ -337,8 +356,10 @@ void Ai_RemoveUnit(UnitInfo* unit) {
     }
 
     for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-        if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
-            AiPlayer_Teams[team].RemoveUnit(unit);
+        AiController* controller = AiController_Get(team);
+
+        if (controller) {
+            controller->RemoveUnit(unit);
         }
     }
 
@@ -346,8 +367,10 @@ void Ai_RemoveUnit(UnitInfo* unit) {
 }
 
 void Ai_UnitSpotted(UnitInfo* unit, uint16_t team) {
-    if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER && (unit->flags & SELECTABLE)) {
-        AiPlayer_Teams[team].UnitSpotted(unit);
+    AiController* controller = AiController_Get(team);
+
+    if (controller && (unit->flags & SELECTABLE)) {
+        controller->UnitSpotted(unit);
     }
 
     TaskManager.AddSpottedUnit(unit);

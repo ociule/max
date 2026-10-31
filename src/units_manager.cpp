@@ -28,6 +28,7 @@
 
 #include "access.hpp"
 #include "ai.hpp"
+#include "aicontroller.hpp"
 #include "ailog.hpp"
 #include "aiplayer.hpp"
 #include "allocmenu.hpp"
@@ -4759,7 +4760,7 @@ bool UnitsManager_ShouldAttack(UnitInfo* unit1, UnitInfo* unit2) {
                 !unit1->IsVisibleToTeam(unit2->team)) {
                 result = false;
 
-            } else if (UnitsManager_TeamInfo[unit1->team].team_type == TEAM_TYPE_COMPUTER) {
+            } else if (AiController_Get(unit1->team)) {
                 // computer players treat every other team as hostile
                 result = true;
 
