@@ -60,12 +60,11 @@ static const char* const JevAi_DirectionNames[8] = {"N", "NE", "E", "SE", "S", "
 
 static const char* const JevAi_UnitInstructions =
     "You command one unit of your team in M.A.X., a turn-based strategy game on a map of square cells. To win, build "
-    "an economy and an army and destroy the enemy. Mining stations on surveyed resources produce raw materials, fuel "
-    "and gold. Power generators power the other buildings. Factories turn materials into units: a Light Vehicle "
-    "Plant makes scouts, surveyors and engineers, a Heavy Vehicle Plant makes tanks and constructors. Constructors "
-    "and engineers build from the materials they carry. Buildings next to your base join it and share materials. "
-    "Explore to find resources and enemies, and avoid danger above 0, where enemies can shoot. Choose this unit's "
-    "action now.";
+    "an economy and an army and destroy the enemy. A usual opening: build a factory next to your base, keep enough "
+    "power for your buildings, put mining stations on surveyed resources, then produce combat units and attack. "
+    "Constructors and engineers build from the raw materials they carry and refill at the base. Buildings that touch "
+    "your base join it and share its materials and power. Explore to find resources and enemies, and avoid danger "
+    "above 0, where enemies can shoot. Choose this unit's action now.";
 
 static const char* const JevAi_FactoryInstructions =
     "You run one factory of your team in M.A.X., a turn-based strategy game. To win, build an economy and an army and "
@@ -95,6 +94,107 @@ static bool JevAi_IsBuilder(ResourceID unit_type) { return unit_type == CONSTRCT
 
 static int32_t JevAi_GetSize(ResourceID unit_type) {
     return (ResourceManager_GetUnit(unit_type).GetFlags() & BUILDING) ? 2 : 1;
+}
+
+/// What a unit type is for, in a few words.
+static std::string JevAi_DescribePurpose(uint16_t team, ResourceID unit_type) {
+    if (JevAi_IsFactory(unit_type)) {
+        std::string result = "factory that makes";
+
+        for (const ResourceID product : Builder_GetBuildableUnits(team, unit_type)) {
+            result += " " + JevAi_GetTypeName(product) + ",";
+        }
+
+        result.back() = ';';
+
+        return result;
+    }
+
+    switch (unit_type) {
+        case MININGST:
+            return "mines raw materials, fuel and gold from the resources under it, the base's only income;";
+        case POWGEN:
+            return "small power plant, most buildings need power to work;";
+        case POWERSTN:
+            return "large power plant for a big base;";
+        case CNCT_4W:
+            return "connector, joins separate buildings into one base;";
+        case ADUMP:
+            return "extra storage for raw materials, only useful when storage is full;";
+        case FDUMP:
+            return "extra storage for fuel, only useful when storage is full;";
+        case GOLDSM:
+            return "extra storage for gold;";
+        case HABITAT:
+            return "dwelling, gives workers to training halls, research centres and eco-spheres;";
+        case RESEARCH:
+            return "research centre, slowly upgrades units, needs workers;";
+        case GREENHSE:
+            return "eco-sphere, scores points, needs workers;";
+        case DEPOT:
+            return "repairs and reloads land units next to it;";
+        case HANGAR:
+            return "repairs and reloads aircraft;";
+        case DOCK:
+            return "repairs and reloads ships;";
+        case BARRACKS:
+            return "repairs and reloads infantry;";
+        case RADAR:
+            return "radar, sees enemies far away;";
+        case GUNTURRT:
+        case ARTYTRRT:
+        case ANTIAIR:
+        case ANTIMSSL:
+            return "fixed defense turret;";
+        case ROAD:
+            return "road, units move faster on it;";
+        case BRIDGE:
+            return "bridge, lets land units cross water;";
+        case WTRPLTFM:
+            return "platform for building on water;";
+        case LANDPAD:
+            return "landing pad for aircraft;";
+        case BLOCK:
+            return "concrete wall that blocks movement;";
+        case CONSTRCT:
+            return "builds large buildings: factories, mining stations, power plants;";
+        case ENGINEER:
+            return "builds small buildings: power generators, connectors, turrets, roads;";
+        case SURVEYOR:
+            return "finds resources for mining stations;";
+        case SCOUT:
+            return "fast scout that sees far;";
+        case TANK:
+            return "main battle tank;";
+        case ARTILLRY:
+            return "artillery, long range against ground;";
+        case ROCKTLCH:
+            return "rocket launcher, long range against ground;";
+        case MISSLLCH:
+            return "missile launcher, very long range;";
+        case SP_FLAK:
+            return "mobile anti-aircraft, only shoots aircraft;";
+        case MINELAYR:
+            return "lays mines;";
+        case SCANNER:
+            return "mobile radar;";
+        case SPLYTRCK:
+            return "supply truck, reloads units;";
+        case REPAIR:
+            return "repair unit;";
+        case FUELTRCK:
+            return "fuel truck;";
+        case GOLDTRCK:
+            return "gold truck;";
+        case BULLDOZR:
+            return "clears rubble;";
+        case INFANTRY:
+            return "infantry;";
+        case COMMANDO:
+            return "infiltrator, steals or disables enemy units;";
+        default:
+            return "";
+    }
 }
 
 /// A short description of what a unit type is for.
@@ -530,9 +630,9 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
         const bool covers_builder = (site.x == builder->grid_x || site.x + 1 == builder->grid_x) &&
                                     (site.y == builder->grid_y || site.y + 1 == builder->grid_y);
         std::string facts = "build a " + JevAi_GetTypeName(unit_type) + " at " + JevAi_FormatPoint(site) + ": " +
-                            std::to_string(turns) + " turns, " + std::to_string(cost) + " raw materials, you carry " +
-                            std::to_string(builder->storage) + ", you have " +
-                            std::to_string(CountOwnUnits(unit_type)) + " already";
+                            JevAi_DescribePurpose(m_team, unit_type) + " " + std::to_string(turns) + " turns, " +
+                            std::to_string(cost) + " raw materials, you carry " + std::to_string(builder->storage) +
+                            ", you have " + std::to_string(CountOwnUnits(unit_type)) + " already";
         int32_t score = 0;
 
         if (!covers_builder) {
@@ -598,7 +698,8 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
 
     for (const ResourceID unit_type : Builder_GetBuildableUnits(m_team, factory->GetUnitType())) {
         const int32_t turns = BuildMenu_GetTurnsToBuild(unit_type, m_team);
-        std::string facts = "produce a " + JevAi_GetTypeName(unit_type) + ": " + std::to_string(turns) + " turns, " +
+        std::string facts = "produce a " + JevAi_GetTypeName(unit_type) + ": " +
+                            JevAi_DescribePurpose(m_team, unit_type) + " " + std::to_string(turns) + " turns, " +
                             std::to_string(turns * rate) + " raw materials, " + JevAi_DescribeType(m_team, unit_type) +
                             ", you have " + std::to_string(CountOwnUnits(unit_type));
         UnitValues* values = UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], unit_type);
@@ -616,6 +717,88 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
                          "produce nothing this turn; the base has " + std::to_string(materials.raw) + " of " +
                              std::to_string(capacity.raw) + " raw materials stored",
                          0});
+}
+
+void JevAi::AddRefillOptions(UnitInfo* builder) {
+    const int32_t capacity = builder->GetBaseValues()->GetAttribute(ATTRIB_STORAGE);
+
+    if (builder->storage >= capacity || !Task_IsReadyToTakeOrders(builder)) {
+        return;
+    }
+
+    UnitInfo* nearest = nullptr;
+    Point nearest_cell;
+    int32_t nearest_distance = INT32_MAX;
+    Cargo nearest_materials;
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        UnitInfo& building = *it;
+
+        if (building.team != m_team || building.hits == 0 || !building.GetComplex() || !(building.flags & BUILDING) ||
+            building.GetOrder() == ORDER_TRANSFER) {
+            continue;
+        }
+
+        Cargo materials;
+        Cargo storage_capacity;
+
+        building.GetComplex()->GetCargoInfo(materials, storage_capacity);
+
+        if (materials.raw <= 0) {
+            continue;
+        }
+
+        Rect bounds;
+
+        building.GetBounds(&bounds);
+
+        const int32_t dx = std::max({bounds.ulx - builder->grid_x, 0, builder->grid_x - (bounds.lrx - 1)});
+        const int32_t dy = std::max({bounds.uly - builder->grid_y, 0, builder->grid_y - (bounds.lry - 1)});
+
+        if (std::max(dx, dy) <= 1) {
+            const int32_t amount = std::min<int32_t>(capacity - builder->storage, materials.raw);
+
+            m_options.push_back({"r" + std::to_string(m_options.size()), Action::REFILL, Point(), INVALID_ID,
+                                 SmartPointer<UnitInfo>(&building),
+                                 "take " + std::to_string(amount) + " raw materials from the " +
+                                     JevAi_GetUnitName(&building) + " next to you, you carry " +
+                                     std::to_string(builder->storage) + " of " + std::to_string(capacity) +
+                                     ", the base stores " + std::to_string(materials.raw),
+                                 builder->storage < capacity / 2 ? 45 : 5});
+
+            return;
+        }
+
+        // the closest free cell around the building
+        for (int32_t x = bounds.ulx - 1; x <= bounds.lrx; ++x) {
+            for (int32_t y = bounds.uly - 1; y <= bounds.lry; ++y) {
+                const Point cell(x, y);
+
+                if (JevAi_IsInsideMap(cell) &&
+                    Access_IsAccessible(builder->GetUnitType(), m_team, x, y, AccessModifier_SameClassBlocks)) {
+                    const int32_t distance = Access_GetSquaredDistance(cell, Point(builder->grid_x, builder->grid_y));
+
+                    if (distance < nearest_distance) {
+                        nearest = &building;
+                        nearest_cell = cell;
+                        nearest_distance = distance;
+                        nearest_materials = materials;
+                    }
+                }
+            }
+        }
+    }
+
+    if (nearest && builder->speed > 0) {
+        m_options.push_back({"g" + std::to_string(m_options.size()), Action::MOVE, nearest_cell, INVALID_ID, nullptr,
+                             "go next to the " + JevAi_GetUnitName(nearest) + " at " + JevAi_FormatPoint(nearest_cell) +
+                                 ", " + std::to_string(static_cast<int32_t>(SDL_sqrt(nearest_distance))) +
+                                 " cells away, to take raw materials there; you carry " +
+                                 std::to_string(builder->storage) + " of " + std::to_string(capacity) +
+                                 ", the base stores " + std::to_string(nearest_materials.raw),
+                             builder->storage < capacity / 2 ? 35 : 0});
+    }
 }
 
 void JevAi::AddAttackOptions(UnitInfo* unit) {
@@ -877,6 +1060,26 @@ void JevAi::Apply(const std::string& answer) {
             }
         } break;
 
+        case Action::REFILL: {
+            // the classic TaskGetMaterials sequence
+            UnitInfo* source = &*option->target;
+            Cargo materials;
+            Cargo capacity;
+
+            source->GetComplex()->GetCargoInfo(materials, capacity);
+
+            source->transfer_cargo = std::min<int32_t>(
+                m_unit->GetBaseValues()->GetAttribute(ATTRIB_STORAGE) - m_unit->storage, materials.raw);
+            source->SetParent(&*m_unit);
+
+            UnitsManager_SetNewOrder(source, ORDER_TRANSFER, ORDER_STATE_INIT);
+
+            m_refill_source = source;
+
+            m_wait_start = SDL_GetTicks();
+            m_state = State::WAIT_FOR_UNIT;
+        } break;
+
         case Action::ATTACK: {
             m_move_start = Point(m_unit->grid_x, m_unit->grid_y);
 
@@ -1015,6 +1218,21 @@ bool JevAi::CheckEndTurn() {
         case State::WAIT_FOR_UNIT: {
             if (!m_unit || m_unit->hits == 0) {
                 FinishUnit();
+
+                return false;
+            }
+
+            if (m_last_action == Action::REFILL) {
+                if (m_refill_source && m_refill_source->GetOrder() == ORDER_TRANSFER &&
+                    SDL_GetTicks() - m_wait_start < JevAi_UnitTimeout) {
+                    return false;
+                }
+
+                SDL_Log("Jev %s: %s now carries %d raw materials.", GetTeamName(), JevAi_GetUnitName(&*m_unit).c_str(),
+                        m_unit->storage);
+
+                m_refill_source = nullptr;
+                m_state = State::SELECT;
 
                 return false;
             }
@@ -1162,6 +1380,7 @@ bool JevAi::CheckEndTurn() {
 
             if (JevAi_IsBuilder(m_unit->GetUnitType())) {
                 AddBuildOptions(&*m_unit);
+                AddRefillOptions(&*m_unit);
             }
 
             m_options.push_back({"stay", Action::STAY, Point(m_unit->grid_x, m_unit->grid_y), INVALID_ID, nullptr,
