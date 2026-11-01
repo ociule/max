@@ -30,7 +30,7 @@ def run_game(label, world, seed, turns, controllers, mock):
     command = [sys.executable, str(ROOT / 'tools' / 'jev_match.py'), '--name', name, '--force'] + \
               (['--mock'] if mock else []) + \
               ['--', '--controllers', controllers, '--world', str(world), '--seed', str(seed), '--turns', str(turns)]
-    subprocess.run(command)
+    subprocess.run(command, check=False)
     return name
 
 

@@ -8,6 +8,10 @@ environment or from .env in the repository root, and answers with one line:
     {"id": 1, "choice": "m3", "model": "jev-1.14.0", "confidence": 0.9, "probabilities": {...}}
 With --mock it answers locally with the option of the highest mock score, without calling Jev.
 
+When the game sends its options as data ("options"), the instructions and option texts Jev sees come from the
+templates in tools/jev_prompts.py; the game's own texts are kept in the log as "game_questions". --game-wording sends
+the game's texts instead.
+
 Every question and answer is appended to the log file as one JSON line.
 
 Usage: python3 tools/jev_bridge.py [--mock] [--port 47811] [--log jev-log.jsonl]
@@ -23,6 +27,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+import jev_prompts
 
 API_URL = 'https://api.typesafe.ai/v1/systemone'
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,6 +91,15 @@ class Bridge:
 
     def answer(self, request):
         start = time.monotonic()
+
+        if 'options' in request and not self.args.game_wording:
+            request['game_questions'] = request['questions']
+            try:
+                request['questions'] = jev_prompts.render_question(request)
+            except (KeyError, TypeError) as error:  # a template bug must not stop the game
+                request['questions'] = request['game_questions']
+                request['template_error'] = f'{type(error).__name__}: {error}'
+
         try:
             reply = ask_mock(request) if self.args.mock else ask_jev(self.key, self.args.model, request,
                                                                        self.args.timeout)
@@ -137,6 +152,7 @@ def main():
     parser.add_argument('--model', default='jev-latest')
     parser.add_argument('--timeout', type=float, default=10.0, help='seconds to wait for Jev')
     parser.add_argument('--log', default='jev-log.jsonl', help='JSON lines file of questions and answers')
+    parser.add_argument('--game-wording', action='store_true', help="send the game's texts, not the templates")
     Bridge(parser.parse_args()).run()
 
 

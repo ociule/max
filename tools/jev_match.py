@@ -87,10 +87,10 @@ def file_hash(path):
 
 
 def git_commit():
-    commit = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], cwd=ROOT, capture_output=True, text=True).stdout
-    dirty = subprocess.run(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, capture_output=True,
-                           text=True).stdout
-    return commit.strip() + ('-dirty' if dirty.strip() else '')
+    def git(*args):
+        return subprocess.run(['git', *args], cwd=ROOT, capture_output=True, text=True, check=False).stdout.strip()
+
+    return git('rev-parse', '--short', 'HEAD') + ('-dirty' if git('status', '--porcelain', '--untracked-files=no') else '')
 
 
 def main():
@@ -135,7 +135,7 @@ def main():
 
             environment = dict(os.environ, MAX_JEV_BRIDGE_PORT=str(port))
             game = subprocess.run(['wine', 'max-port.exe', *game_args, '--hidden'], cwd=slot, env=environment,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
             bridge.terminate()
             bridge.wait(timeout=10)

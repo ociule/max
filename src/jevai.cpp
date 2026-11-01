@@ -109,6 +109,9 @@ static std::string JevAi_FormatPoint(Point point) {
     return "[" + std::to_string(point.x + 1) + "," + std::to_string(point.y + 1) + "]";
 }
 
+/// A map cell as the player sees it, counted from 1.
+static nlohmann::ordered_json JevAi_PointData(Point point) { return {point.x + 1, point.y + 1}; }
+
 static int32_t JevAi_GetDistance(Point a, Point b) {
     return static_cast<int32_t>(SDL_sqrt(Access_GetSquaredDistance(a, b)));
 }
@@ -293,6 +296,146 @@ static std::string JevAi_DescribeType(uint16_t team, ResourceID unit_type) {
 
     if (values->GetAttribute(ATTRIB_SPEED) > 0) {
         result += ", speed " + std::to_string(values->GetAttribute(ATTRIB_SPEED));
+    }
+
+    return result;
+}
+
+/// The engine name of a unit type, a stable key for the prompt templates.
+static const char* JevAi_GetTypeKey(ResourceID unit_type) {
+    switch (unit_type) {
+        case MININGST:
+            return "MININGST";
+        case POWGEN:
+            return "POWGEN";
+        case POWERSTN:
+            return "POWERSTN";
+        case CNCT_4W:
+            return "CNCT_4W";
+        case ADUMP:
+            return "ADUMP";
+        case FDUMP:
+            return "FDUMP";
+        case GOLDSM:
+            return "GOLDSM";
+        case HABITAT:
+            return "HABITAT";
+        case RESEARCH:
+            return "RESEARCH";
+        case GREENHSE:
+            return "GREENHSE";
+        case DEPOT:
+            return "DEPOT";
+        case HANGAR:
+            return "HANGAR";
+        case DOCK:
+            return "DOCK";
+        case BARRACKS:
+            return "BARRACKS";
+        case RADAR:
+            return "RADAR";
+        case GUNTURRT:
+            return "GUNTURRT";
+        case ARTYTRRT:
+            return "ARTYTRRT";
+        case ANTIAIR:
+            return "ANTIAIR";
+        case ANTIMSSL:
+            return "ANTIMSSL";
+        case ROAD:
+            return "ROAD";
+        case BRIDGE:
+            return "BRIDGE";
+        case WTRPLTFM:
+            return "WTRPLTFM";
+        case LANDPAD:
+            return "LANDPAD";
+        case BLOCK:
+            return "BLOCK";
+        case CONSTRCT:
+            return "CONSTRCT";
+        case ENGINEER:
+            return "ENGINEER";
+        case SURVEYOR:
+            return "SURVEYOR";
+        case SCOUT:
+            return "SCOUT";
+        case TANK:
+            return "TANK";
+        case ARTILLRY:
+            return "ARTILLRY";
+        case ROCKTLCH:
+            return "ROCKTLCH";
+        case MISSLLCH:
+            return "MISSLLCH";
+        case SP_FLAK:
+            return "SP_FLAK";
+        case MINELAYR:
+            return "MINELAYR";
+        case SCANNER:
+            return "SCANNER";
+        case SPLYTRCK:
+            return "SPLYTRCK";
+        case REPAIR:
+            return "REPAIR";
+        case FUELTRCK:
+            return "FUELTRCK";
+        case GOLDTRCK:
+            return "GOLDTRCK";
+        case BULLDOZR:
+            return "BULLDOZR";
+        case INFANTRY:
+            return "INFANTRY";
+        case COMMANDO:
+            return "COMMANDO";
+        case LIGHTPLT:
+            return "LIGHTPLT";
+        case LANDPLT:
+            return "LANDPLT";
+        case SHIPYARD:
+            return "SHIPYARD";
+        case AIRPLT:
+            return "AIRPLT";
+        case TRAINHAL:
+            return "TRAINHAL";
+        default:
+            return "";
+    }
+}
+
+/// What a unit type is for, as data: its name, and for a factory what it makes.
+static nlohmann::ordered_json JevAi_PurposeData(uint16_t team, ResourceID unit_type) {
+    nlohmann::ordered_json result = {{"type", JevAi_GetTypeName(unit_type)}, {"key", JevAi_GetTypeKey(unit_type)}};
+
+    if (JevAi_IsFactory(unit_type)) {
+        nlohmann::ordered_json combat = nlohmann::ordered_json::array();
+        nlohmann::ordered_json other = nlohmann::ordered_json::array();
+
+        for (const ResourceID product : Builder_GetBuildableUnits(team, unit_type)) {
+            (JevAi_IsGroundCombatUnit(team, product) ? combat : other).push_back(JevAi_GetTypeName(product));
+        }
+
+        result["factory"] = {{"combat", combat}, {"other", other}};
+    }
+
+    return result;
+}
+
+/// A unit type's attack, range, hits, armor and speed.
+static nlohmann::ordered_json JevAi_StatsData(uint16_t team, ResourceID unit_type) {
+    UnitValues* values = UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[team], unit_type);
+    nlohmann::ordered_json result = nlohmann::ordered_json::object();
+
+    if (values->GetAttribute(ATTRIB_ATTACK) > 0) {
+        result["attack"] = values->GetAttribute(ATTRIB_ATTACK);
+        result["range"] = values->GetAttribute(ATTRIB_RANGE);
+    }
+
+    result["hits"] = values->GetAttribute(ATTRIB_HITS);
+    result["armor"] = values->GetAttribute(ATTRIB_ARMOR);
+
+    if (values->GetAttribute(ATTRIB_SPEED) > 0) {
+        result["speed"] = values->GetAttribute(ATTRIB_SPEED);
     }
 
     return result;
@@ -721,24 +864,35 @@ void JevAi::AddMoveOptions(UnitInfo* unit) {
                                 JevAi_DirectionNames[direction] + " " + std::to_string(distances[i]) + " cells to " +
                                 JevAi_FormatPoint(destination) + ": reveals " + std::to_string(revealed) +
                                 " unexplored cells, danger " + std::to_string(danger);
+            json data = {{"action", "move"},         {"direction", JevAi_DirectionNames[direction]},
+                         {"distance", distances[i]}, {"to", JevAi_PointData(destination)},
+                         {"revealed", revealed},     {"danger", danger}};
+
+            if (is_builder) {
+                data["away_from_danger"] = true;
+            }
 
             if (is_military && has_base) {
                 facts += ", " + std::to_string(JevAi_GetDistance(destination, base)) + " cells from your base";
+                data["from_base"] = JevAi_GetDistance(destination, base);
 
                 const int32_t builder_distance = GetDistanceToOwnBuilder(destination);
 
                 if (builder_distance >= 0) {
                     facts += ", " + std::to_string(builder_distance) + " cells from your nearest builder";
+                    data["from_builder"] = builder_distance;
                 }
             }
 
             if (revealed == 0) {
                 facts +=
                     ", nearest unexplored cell " + std::to_string(GetDistanceToUnexplored(destination)) + " cells away";
+                data["nearest_unexplored"] = GetDistanceToUnexplored(destination);
             }
 
             if (nearest_enemy >= 0) {
                 facts += ", nearest known enemy " + std::to_string(nearest_enemy) + " cells away";
+                data["nearest_enemy"] = nearest_enemy;
             }
 
             if (unit->GetUnitType() == SURVEYOR) {
@@ -751,10 +905,11 @@ void JevAi::AddMoveOptions(UnitInfo* unit) {
 
                 facts += ", resources there raw " + std::to_string(raw) + " fuel " + std::to_string(fuel) + " gold " +
                          std::to_string(gold);
+                data["resources"] = {{"raw", raw}, {"fuel", fuel}, {"gold", gold}};
             }
 
             m_options.push_back({"m" + std::to_string(m_options.size()), Action::MOVE, destination, INVALID_ID, nullptr,
-                                 facts, revealed - danger * 10});
+                                 facts, revealed - danger * 10, data});
         }
     }
 }
@@ -882,10 +1037,19 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                             JevAi_DescribePurpose(m_team, unit_type) + " " + std::to_string(turns) + " turns, " +
                             std::to_string(cost) + " raw materials, you carry " + std::to_string(builder->storage) +
                             ", you have " + std::to_string(CountOwnUnits(unit_type)) + " already";
+        json data = {{"action", "build"},
+                     {"type", JevAi_GetTypeName(unit_type)},
+                     {"at", JevAi_PointData(site)},
+                     {"purpose", JevAi_PurposeData(m_team, unit_type)},
+                     {"turns", turns},
+                     {"cost", cost},
+                     {"carried", builder->storage},
+                     {"have", CountOwnUnits(unit_type)}};
         int32_t score = 0;
 
         if (!covers_builder) {
             facts += ", the builder walks there first";
+            data["walks_there"] = true;
         }
 
         if (unit_type == MININGST) {
@@ -901,10 +1065,12 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
             facts += ", surveyed resources under it raw " + std::to_string(raw) + " fuel " + std::to_string(fuel) +
                      " gold " + std::to_string(gold);
+            data["resources"] = {{"raw", raw}, {"fuel", fuel}, {"gold", gold}};
             score = (raw + fuel + gold) > 0 ? 40 + raw + fuel + gold : -10;
 
         } else {
             facts += TouchesBase(unit_type, site) ? ", joins your base" : ", not connected to your base";
+            data["joins_base"] = TouchesBase(unit_type, site);
 
             if (JevAi_IsFactory(unit_type)) {
                 score = (CountOwnUnits(unit_type) == 0) ? 60 : 5;
@@ -915,9 +1081,11 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             } else if (unit_type == GREENHSE) {
                 score = 30;
                 facts += ", " + std::to_string(workers_given - workers_needed) + " workers spare";
+                data["workers_spare"] = workers_given - workers_needed;
 
                 if (JevAi_GetTurnsLeft() > 0) {
                     facts += ", " + std::to_string(JevAi_GetTurnsLeft()) + " turns left in the game";
+                    data["turns_left"] = JevAi_GetTurnsLeft();
                 }
 
             } else if (unit_type == HABITAT) {
@@ -925,6 +1093,8 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 facts += ", gives " + std::to_string(-Cargo_GetLifeConsumptionRate(HABITAT)) +
                          " workers, each Eco-sphere needs 1, you have " +
                          std::to_string(std::max(0, workers_given - workers_needed)) + " spare";
+                data["gives_workers"] = -Cargo_GetLifeConsumptionRate(HABITAT);
+                data["workers_spare"] = std::max(0, workers_given - workers_needed);
             }
 
             if (unit_type == POWGEN) {
@@ -933,9 +1103,16 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                          " power; your buildings, with those being built, need " + std::to_string(power_needed) +
                          " power and your generators give " + std::to_string(power_generated) + ", the base mines " +
                          std::to_string(fuel_mining_capacity.fuel) + " fuel per turn at most";
+                data["generator"] = {{"burns_fuel", Cargo_GetFuelConsumptionRate(POWGEN)},
+                                     {"gives_power", -Cargo_GetPowerConsumptionRate(POWGEN)},
+                                     {"power_needed", power_needed},
+                                     {"power_generated", power_generated},
+                                     {"fuel_mined_max", fuel_mining_capacity.fuel}};
 
             } else if (Cargo_GetPowerConsumptionRate(unit_type) > 0) {
                 facts += ", needs " + std::to_string(Cargo_GetPowerConsumptionRate(unit_type)) + " power";
+                data["needs_power"] = Cargo_GetPowerConsumptionRate(unit_type);
+                data["power_spare"] = spare_power;
 
                 if (spare_power < Cargo_GetPowerConsumptionRate(unit_type)) {
                     facts += " and the base has none spare yet";
@@ -945,6 +1122,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
         if (cost > builder->storage) {
             facts += ", not enough materials carried";
+            data["not_enough_materials"] = true;
             score = -50;
         }
 
@@ -952,11 +1130,12 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             if (UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], unit_type)
                     ->GetAttribute(ATTRIB_ATTACK) > 0) {
                 facts += ", a defense: " + JevAi_DescribeType(m_team, unit_type);
+                data["defense"] = JevAi_StatsData(m_team, unit_type);
             }
         }
 
         m_options.push_back(
-            {"b" + std::to_string(m_options.size()), Action::BUILD, site, unit_type, nullptr, facts, score});
+            {"b" + std::to_string(m_options.size()), Action::BUILD, site, unit_type, nullptr, facts, score, data});
     }
 }
 
@@ -983,14 +1162,32 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
             score = (CountOwnUnits(unit_type) < 2) ? 30 : -5;
         }
 
-        m_options.push_back(
-            {"p" + std::to_string(m_options.size()), Action::PRODUCE, Point(), unit_type, nullptr, facts, score});
+        m_options.push_back({"p" + std::to_string(m_options.size()),
+                             Action::PRODUCE,
+                             Point(),
+                             unit_type,
+                             nullptr,
+                             facts,
+                             score,
+                             {{"action", "produce"},
+                              {"type", JevAi_GetTypeName(unit_type)},
+                              {"purpose", JevAi_PurposeData(m_team, unit_type)},
+                              {"turns", turns},
+                              {"cost", turns * rate},
+                              {"stats", JevAi_StatsData(m_team, unit_type)},
+                              {"have", CountOwnUnits(unit_type)}}});
     }
 
-    m_options.push_back({"nothing", Action::STAY, Point(), INVALID_ID, nullptr,
-                         "produce nothing this turn; the base has " + std::to_string(materials.raw) + " of " +
-                             std::to_string(capacity.raw) + " raw materials stored",
-                         0});
+    m_options.push_back(
+        {"nothing",
+         Action::STAY,
+         Point(),
+         INVALID_ID,
+         nullptr,
+         "produce nothing this turn; the base has " + std::to_string(materials.raw) + " of " +
+             std::to_string(capacity.raw) + " raw materials stored",
+         0,
+         {{"action", "produce_nothing"}, {"base_raw", materials.raw}, {"base_raw_capacity", capacity.raw}}});
 }
 
 void JevAi::AddRefillOptions(UnitInfo* builder) {
@@ -1049,13 +1246,22 @@ void JevAi::AddRefillOptions(UnitInfo* builder) {
                 continue;
             }
 
-            m_options.push_back({"r" + std::to_string(m_options.size()), Action::REFILL, Point(), INVALID_ID,
+            m_options.push_back({"r" + std::to_string(m_options.size()),
+                                 Action::REFILL,
+                                 Point(),
+                                 INVALID_ID,
                                  SmartPointer<UnitInfo>(source),
                                  "take " + std::to_string(amount) + " raw materials from the " +
                                      JevAi_GetUnitName(&building) + " next to you, you carry " +
                                      std::to_string(builder->storage) + " of " + std::to_string(capacity) +
                                      ", the base stores " + std::to_string(materials.raw),
-                                 builder->storage < capacity / 2 ? 45 : 5});
+                                 builder->storage < capacity / 2 ? 45 : 5,
+                                 {{"action", "refill"},
+                                  {"amount", amount},
+                                  {"from", JevAi_GetUnitName(&building)},
+                                  {"carried", builder->storage},
+                                  {"capacity", capacity},
+                                  {"base_raw", materials.raw}}});
 
             return;
         }
@@ -1081,13 +1287,24 @@ void JevAi::AddRefillOptions(UnitInfo* builder) {
     }
 
     if (nearest && builder->speed > 0) {
-        m_options.push_back({"g" + std::to_string(m_options.size()), Action::MOVE, nearest_cell, INVALID_ID, nullptr,
+        m_options.push_back({"g" + std::to_string(m_options.size()),
+                             Action::MOVE,
+                             nearest_cell,
+                             INVALID_ID,
+                             nullptr,
                              "go next to the " + JevAi_GetUnitName(nearest) + " at " + JevAi_FormatPoint(nearest_cell) +
                                  ", " + std::to_string(static_cast<int32_t>(SDL_sqrt(nearest_distance))) +
                                  " cells away, to take raw materials there; you carry " +
                                  std::to_string(builder->storage) + " of " + std::to_string(capacity) +
                                  ", the base stores " + std::to_string(nearest_materials.raw),
-                             builder->storage < capacity / 2 ? 35 : 0});
+                             builder->storage < capacity / 2 ? 35 : 0,
+                             {{"action", "go_refill"},
+                              {"to_building", JevAi_GetUnitName(nearest)},
+                              {"to", JevAi_PointData(nearest_cell)},
+                              {"distance", static_cast<int32_t>(SDL_sqrt(nearest_distance))},
+                              {"carried", builder->storage},
+                              {"capacity", capacity},
+                              {"base_raw", nearest_materials.raw}}});
     }
 }
 
@@ -1137,9 +1354,23 @@ void JevAi::AddAttackOptions(UnitInfo* unit) {
                 facts += ", it can be destroyed this turn";
             }
 
+            json data = {{"action", "attack"},
+                         {"target", JevAi_GetUnitName(&target)},
+                         {"at", JevAi_PointData(Point(target.grid_x, target.grid_y))},
+                         {"hits", target.hits},
+                         {"max_hits", target_values->GetAttribute(ATTRIB_HITS)},
+                         {"damage_per_shot", damage},
+                         {"shots", unit->shots},
+                         {"in_range", in_range},
+                         {"destroyable", target.hits <= damage * unit->shots}};
+
+            if (shoots_back) {
+                data["shoots_back_attack"] = target_values->GetAttribute(ATTRIB_ATTACK);
+            }
+
             m_options.push_back({"a" + std::to_string(m_options.size()), Action::ATTACK,
                                  Point(target.grid_x, target.grid_y), INVALID_ID, SmartPointer<UnitInfo>(&target),
-                                 facts, 50 + damage * 5 - (shoots_back ? 10 : 0)});
+                                 facts, 50 + damage * 5 - (shoots_back ? 10 : 0), data});
         }
     }
 }
@@ -1298,9 +1529,12 @@ bool JevAi::Ask(UnitInfo* unit, const char* instructions) {
     json criteria;
     json scores;
 
+    json options = json::object();
+
     for (const auto& option : m_options) {
         criteria[option.key] = option.facts;
         scores[option.key] = option.score;
+        options[option.key] = option.data;
     }
 
     json request;
@@ -1310,6 +1544,8 @@ bool JevAi::Ask(UnitInfo* unit, const char* instructions) {
     request["state"] = GetState(unit);
     request["questions"] = {{m_question, {{"type", "choice"}, {"instructions", instructions}, {"criteria", criteria}}}};
     request["mock_scores"] = scores;
+    // for the bridge's prompt templates: the same options as data
+    request["options"] = options;
 
     ++m_turn_questions;
 
@@ -1807,9 +2043,14 @@ bool JevAi::CheckEndTurn() {
                 AddRefillOptions(&*m_unit);
             }
 
-            m_options.push_back({"stay", Action::STAY, Point(m_unit->grid_x, m_unit->grid_y), INVALID_ID, nullptr,
+            m_options.push_back({"stay",
+                                 Action::STAY,
+                                 Point(m_unit->grid_x, m_unit->grid_y),
+                                 INVALID_ID,
+                                 nullptr,
                                  "stay where it is for the rest of this turn, danger " + std::to_string(danger_here),
-                                 -danger_here * 10});
+                                 -danger_here * 10,
+                                 {{"action", "stay"}, {"danger", danger_here}}});
             m_question = is_construction ? "construction" : "military";
             ++m_unit_picks;
 
