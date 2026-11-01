@@ -58,18 +58,34 @@ static constexpr int32_t JevAi_SiteSearchRadius = 6;
 
 static const char* const JevAi_DirectionNames[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
 
-static const char* const JevAi_UnitInstructions =
-    "You command one unit of your team in M.A.X., a turn-based strategy game on a map of square cells. To win, build "
-    "an economy and an army and destroy the enemy. A usual opening: build a factory next to your base, keep enough "
-    "power for your buildings, put mining stations on surveyed resources, then produce combat units and attack. "
-    "Constructors and engineers build from the raw materials they carry and refill at the base. Buildings that touch "
-    "your base join it and share its materials and power. Explore to find resources and enemies, and avoid danger "
-    "above 0, where enemies can shoot. Choose this unit's action now.";
+static const char* const JevAi_ConstructionInstructions =
+    "You manage construction for your team in M.A.X., a turn-based strategy game on a map of square cells. Military "
+    "units are commanded separately; your job is the economy and production that feed them. Choose what this unit "
+    "does now. Rules, most important first: 1. If your team has no factory, building one comes first; the Heavy "
+    "Vehicle Plant is the only factory that makes tanks and other strong combat units, and new Constructors. 2. A "
+    "building that needs power does not work while the base has no spare power; Engineers build Power Generators "
+    "quickly, so start the factory and let an Engineer add power. 3. Keep builders out of danger. If your team has "
+    "only one Constructor and no factory, losing it loses the game. 4. Put mining stations on surveyed resources to "
+    "raise income; surveyors find those resources near the base. 5. Builders use the raw materials they carry; refill "
+    "at the base when they carry too little. Buildings that touch your base join it and share its materials and "
+    "power.";
 
 static const char* const JevAi_FactoryInstructions =
-    "You run one factory of your team in M.A.X., a turn-based strategy game. To win, build an economy and an army and "
-    "destroy the enemy. Choose which unit this factory produces next, or nothing. A unit takes the given number of "
-    "turns and uses raw materials from your base every turn while it is being built.";
+    "You manage production for your team in M.A.X., a turn-based strategy game. Military units are commanded "
+    "separately; you choose what this factory produces next, or nothing. A unit takes the given number of turns and "
+    "uses raw materials from your base every turn while it is being built. Rules, most important first: 1. If your "
+    "team has only one Constructor, produce another one first when this factory can, so that losing a builder does "
+    "not lose the game. 2. Then produce combat units that fight ground units, a mix of strong and long range ones. 3. "
+    "Produce nothing only when the base cannot afford anything useful.";
+
+static const char* const JevAi_MilitaryInstructions =
+    "You command one military or support unit of your team in M.A.X., a turn-based strategy game on a map of square "
+    "cells. Construction is managed separately; your job is to find and destroy the enemy while keeping your base "
+    "and your builders safe. Choose this unit's action now. Rules, most important first: 1. Attack enemies you can "
+    "damage, above all ones that can be destroyed this turn or cannot shoot back. 2. If enemies are near your base "
+    "or your builders, move between them or attack them. 3. Do not move where the danger is higher than this unit's "
+    "hits unless it can destroy the enemy there. 4. Otherwise explore to find the enemy: fast units go far, slow "
+    "units stay within a few cells of the base until enemies are found.";
 
 static bool JevAi_IsInsideMap(Point point) {
     return point.x >= 0 && point.y >= 0 && point.x < ResourceManager_MapSize.x && point.y < ResourceManager_MapSize.y;
@@ -85,12 +101,29 @@ static std::string JevAi_FormatPoint(Point point) {
     return "[" + std::to_string(point.x + 1) + "," + std::to_string(point.y + 1) + "]";
 }
 
+static int32_t JevAi_GetDistance(Point a, Point b) {
+    return static_cast<int32_t>(SDL_sqrt(Access_GetSquaredDistance(a, b)));
+}
+
 static bool JevAi_IsFactory(ResourceID unit_type) {
     return unit_type == LIGHTPLT || unit_type == LANDPLT || unit_type == SHIPYARD || unit_type == AIRPLT ||
            unit_type == TRAINHAL;
 }
 
 static bool JevAi_IsBuilder(ResourceID unit_type) { return unit_type == CONSTRCT || unit_type == ENGINEER; }
+
+/// Builders and surveyors answer construction questions, all other mobile units military ones.
+static bool JevAi_IsConstructionUnit(ResourceID unit_type) {
+    return JevAi_IsBuilder(unit_type) || unit_type == SURVEYOR;
+}
+
+/// Units that fight ground units. Scouts are left out, they are for seeing.
+static bool JevAi_IsGroundCombatUnit(uint16_t team, ResourceID unit_type) {
+    return unit_type != SCOUT &&
+           UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[team], unit_type)->GetAttribute(ATTRIB_ATTACK) >
+               0 &&
+           Access_IsValidAttackTargetType(unit_type, TANK);
+}
 
 static int32_t JevAi_GetSize(ResourceID unit_type) {
     return (ResourceManager_GetUnit(unit_type).GetFlags() & BUILDING) ? 2 : 1;
@@ -99,15 +132,31 @@ static int32_t JevAi_GetSize(ResourceID unit_type) {
 /// What a unit type is for, in a few words.
 static std::string JevAi_DescribePurpose(uint16_t team, ResourceID unit_type) {
     if (JevAi_IsFactory(unit_type)) {
-        std::string result = "factory that makes";
+        std::string combat;
+        std::string other;
+        bool makes_constructors = false;
 
         for (const ResourceID product : Builder_GetBuildableUnits(team, unit_type)) {
-            result += " " + JevAi_GetTypeName(product) + ",";
+            std::string& names = JevAi_IsGroundCombatUnit(team, product) ? combat : other;
+
+            names += (names.empty() ? "" : ", ") + JevAi_GetTypeName(product);
+            makes_constructors |= product == CONSTRCT;
         }
 
-        result.back() = ';';
+        std::string result = "factory; ";
 
-        return result;
+        result += combat.empty() ? "it makes no combat units that fight ground units"
+                                 : "combat units against ground: " + combat;
+
+        if (!other.empty()) {
+            result += "; other units: " + other;
+        }
+
+        if (makes_constructors) {
+            result += "; the only factory that makes new Constructors";
+        }
+
+        return result + ";";
     }
 
     switch (unit_type) {
@@ -302,6 +351,36 @@ int32_t JevAi::CountOwnUnits(ResourceID unit_type) const {
     }
 
     return result;
+}
+
+bool JevAi::GetBasePosition(Point& position) const {
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team == m_team && (*it).hits > 0 && (*it).GetComplex() && ((*it).flags & BUILDING)) {
+            position = Point((*it).grid_x, (*it).grid_y);
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int32_t JevAi::GetDistanceToOwnBuilder(Point point) const {
+    int32_t nearest = -1;
+
+    for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
+         it != it_end; ++it) {
+        if ((*it).team == m_team && (*it).hits > 0 && JevAi_IsBuilder((*it).GetUnitType())) {
+            const int32_t distance = JevAi_GetDistance(point, Point((*it).grid_x, (*it).grid_y));
+
+            if (nearest < 0 || distance < nearest) {
+                nearest = distance;
+            }
+        }
+    }
+
+    return nearest;
 }
 
 bool JevAi::TouchesBase(ResourceID unit_type, Point site) const {
@@ -550,6 +629,11 @@ void JevAi::AddMoveOptions(UnitInfo* unit) {
     const Point position(unit->grid_x, unit->grid_y);
     const int32_t scan = unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN);
     const int32_t speed = unit->speed;
+    const bool is_builder = JevAi_IsBuilder(unit->GetUnitType());
+    const bool is_military = !JevAi_IsConstructionUnit(unit->GetUnitType());
+    const int32_t danger_here = GetDanger(unit, position, nullptr);
+    Point base;
+    const bool has_base = GetBasePosition(base);
     int32_t nearest_enemy;
 
     if (speed == 0) {
@@ -579,10 +663,26 @@ void JevAi::AddMoveOptions(UnitInfo* unit) {
 
             const int32_t revealed = CountUnexplored(destination, scan);
             const int32_t danger = GetDanger(unit, destination, &nearest_enemy);
-            std::string facts = std::string("move ") + JevAi_DirectionNames[direction] + " " +
-                                std::to_string(distances[i]) + " cells to " + JevAi_FormatPoint(destination) +
-                                ": reveals " + std::to_string(revealed) + " unexplored cells, danger " +
-                                std::to_string(danger);
+
+            // builders only move to build, to refill or to get out of danger; surveyors only move where it is safe
+            if ((is_builder && danger >= danger_here) || (!is_military && danger > 0 && danger >= danger_here)) {
+                continue;
+            }
+
+            std::string facts = std::string(is_builder ? "move away from danger " : "move ") +
+                                JevAi_DirectionNames[direction] + " " + std::to_string(distances[i]) + " cells to " +
+                                JevAi_FormatPoint(destination) + ": reveals " + std::to_string(revealed) +
+                                " unexplored cells, danger " + std::to_string(danger);
+
+            if (is_military && has_base) {
+                facts += ", " + std::to_string(JevAi_GetDistance(destination, base)) + " cells from your base";
+
+                const int32_t builder_distance = GetDistanceToOwnBuilder(destination);
+
+                if (builder_distance >= 0) {
+                    facts += ", " + std::to_string(builder_distance) + " cells from your nearest builder";
+                }
+            }
 
             if (revealed == 0) {
                 facts +=
@@ -727,6 +827,10 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
             } else if (Cargo_GetPowerConsumptionRate(unit_type) > 0) {
                 facts += ", needs " + std::to_string(Cargo_GetPowerConsumptionRate(unit_type)) + " power";
+
+                if (spare_power < Cargo_GetPowerConsumptionRate(unit_type)) {
+                    facts += " and the base has none spare yet";
+                }
             }
         }
 
@@ -935,8 +1039,14 @@ json JevAi::GetState(UnitInfo* unit) const {
     json state;
     json buildings = json::object();
     json units = json::object();
+    json enemies = json::array();
     int32_t nearest_enemy;
     int32_t enemies_seen = 0;
+    int32_t factories = 0;
+    int32_t combat_units = 0;
+    std::vector<std::pair<int32_t, UnitInfo*>> visible_enemies;
+    const Point position(unit->grid_x, unit->grid_y);
+    const bool is_military = !(unit->flags & STATIONARY) && !JevAi_IsConstructionUnit(unit->GetUnitType());
 
     for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_MobileAirUnits, &UnitsManager_StationaryUnits}) {
         for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
@@ -952,8 +1062,16 @@ json JevAi::GetState(UnitInfo* unit) const {
                     counts[name] = counts.value(name, 0) + 1;
                 }
 
+                factories += JevAi_IsFactory((*it).GetUnitType());
+                combat_units += !((*it).flags & STATIONARY) && JevAi_IsGroundCombatUnit(m_team, (*it).GetUnitType());
+
             } else if ((*it).IsVisibleToTeam(m_team)) {
                 ++enemies_seen;
+
+                if ((*it).GetUnitType() != CNCT_4W && (*it).GetUnitType() != ROAD) {
+                    visible_enemies.push_back(
+                        {JevAi_GetDistance(position, Point((*it).grid_x, (*it).grid_y)), it->Get()});
+                }
             }
         }
     }
@@ -967,13 +1085,55 @@ json JevAi::GetState(UnitInfo* unit) const {
 
     if (!(unit->flags & STATIONARY)) {
         state["you"]["moves_left"] = unit->speed;
-        state["you"]["danger_here"] = GetDanger(unit, Point(unit->grid_x, unit->grid_y), &nearest_enemy);
+        state["you"]["danger_here"] = GetDanger(unit, position, &nearest_enemy);
 
         if (JevAi_IsBuilder(unit->GetUnitType())) {
             state["you"]["materials_carried"] = unit->storage;
             state["you"]["materials_capacity"] = unit->GetBaseValues()->GetAttribute(ATTRIB_STORAGE);
         }
     }
+
+    if (is_military) {
+        Point base;
+
+        std::sort(visible_enemies.begin(), visible_enemies.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+
+        for (size_t i = 0; i < visible_enemies.size() && i < 5; ++i) {
+            UnitInfo* enemy = visible_enemies[i].second;
+
+            enemies.push_back({{"type", JevAi_GetUnitName(enemy)},
+                               {"position", {enemy->grid_x + 1, enemy->grid_y + 1}},
+                               {"hits", enemy->hits},
+                               {"distance", visible_enemies[i].first}});
+        }
+
+        if (GetBasePosition(base)) {
+            state["you"]["distance_to_base"] = JevAi_GetDistance(position, base);
+            state["base_position"] = {base.x + 1, base.y + 1};
+        }
+
+        const int32_t builder_distance = GetDistanceToOwnBuilder(position);
+
+        if (builder_distance >= 0) {
+            state["you"]["distance_to_nearest_builder"] = builder_distance;
+        }
+
+        state["army"] = {{"combat_units", combat_units},
+                         {"builders", CountOwnUnits(CONSTRCT) + CountOwnUnits(ENGINEER)}};
+        state["nearest_enemies"] = enemies;
+        state["enemies_seen"] = enemies_seen;
+        state["explored_cells"] = m_explored_cells;
+        state["map_cells"] = ResourceManager_MapSize.x * ResourceManager_MapSize.y;
+        state["units_lost"] = m_units_lost;
+
+        return state;
+    }
+
+    state["team"] = {{"factories", factories},
+                     {"constructors", CountOwnUnits(CONSTRCT)},
+                     {"engineers", CountOwnUnits(ENGINEER)},
+                     {"combat_units", combat_units}};
 
     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
          ++it) {
@@ -1227,6 +1387,10 @@ void JevAi::BeginTurn() {
         }
     }
 
+    // construction first, so that military units see this turn's new sites and builders
+    std::stable_partition(m_units.begin(), m_units.end(),
+                          [](const auto& unit) { return JevAi_IsConstructionUnit(unit->GetUnitType()); });
+
     BalanceEconomy();
 
     std::string buildings;
@@ -1406,7 +1570,7 @@ bool JevAi::CheckEndTurn() {
                         m_unit = factory;
                         m_options.clear();
                         AddProduceOptions(factory);
-                        m_question = "produce";
+                        m_question = "production";
 
                         if (m_options.size() > 1 && Ask(factory, JevAi_FactoryInstructions)) {
                             m_wait_start = SDL_GetTicks();
@@ -1452,8 +1616,14 @@ bool JevAi::CheckEndTurn() {
 
             const int32_t danger_here = GetDanger(&*m_unit, Point(m_unit->grid_x, m_unit->grid_y), nullptr);
 
+            const bool is_construction = JevAi_IsConstructionUnit(m_unit->GetUnitType());
+
             m_options.clear();
-            AddAttackOptions(&*m_unit);
+
+            if (!is_construction) {
+                AddAttackOptions(&*m_unit);
+            }
+
             AddMoveOptions(&*m_unit);
 
             if (JevAi_IsBuilder(m_unit->GetUnitType())) {
@@ -1464,10 +1634,11 @@ bool JevAi::CheckEndTurn() {
             m_options.push_back({"stay", Action::STAY, Point(m_unit->grid_x, m_unit->grid_y), INVALID_ID, nullptr,
                                  "stay where it is for the rest of this turn, danger " + std::to_string(danger_here),
                                  -danger_here * 10});
-            m_question = "action";
+            m_question = is_construction ? "construction" : "military";
             ++m_unit_picks;
 
-            if (m_options.size() > 1 && Ask(&*m_unit, JevAi_UnitInstructions)) {
+            if (m_options.size() > 1 &&
+                Ask(&*m_unit, is_construction ? JevAi_ConstructionInstructions : JevAi_MilitaryInstructions)) {
                 m_wait_start = SDL_GetTicks();
                 m_state = State::WAIT_FOR_ANSWER;
 
