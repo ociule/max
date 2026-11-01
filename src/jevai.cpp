@@ -718,37 +718,57 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
     const int32_t rate = Cargo_GetRawConsumptionRate(builder->GetUnitType(), 1);
     int32_t spare_power = 0;
-    int32_t spare_fuel = 0;
     bool enemies_seen = false;
 
     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
          ++it) {
         if ((*it).team == m_team && (*it).GetComplex()) {
-            Cargo mining;
-            Cargo mining_capacity;
-            int32_t burned = 0;
-
-            (*it).GetComplex()->GetCargoMining(mining, mining_capacity);
-
-            for (auto it2 = UnitsManager_StationaryUnits.Begin(), it2_end = UnitsManager_StationaryUnits.End();
-                 it2 != it2_end; ++it2) {
-                if ((*it2).GetComplex() == (*it).GetComplex() && (*it2).GetUnitType() == POWGEN &&
-                    (*it2).GetOrder() == ORDER_POWER_ON) {
-                    burned += Cargo_GetFuelConsumptionRate(POWGEN);
-                }
-            }
-
             spare_power = (*it).GetComplex()->power;
-            spare_fuel = mining_capacity.fuel - burned;
             break;
         }
     }
+
+    // as the classic AI does: power needed by all buildings, also those being built, against all generators
+    int32_t power_needed = 0;
+    int32_t power_generated = 0;
+    int32_t generators = 0;
+    Cargo fuel_mining;
+    Cargo fuel_mining_capacity;
 
     for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_StationaryUnits}) {
         for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
             if ((*it).team != m_team && (*it).team != PLAYER_TEAM_ALIEN && (*it).hits > 0 &&
                 (*it).IsVisibleToTeam(m_team)) {
                 enemies_seen = true;
+            }
+
+            if ((*it).team != m_team || (*it).hits == 0) {
+                continue;
+            }
+
+            ResourceID power_unit = INVALID_ID;
+
+            if ((*it).flags & STATIONARY) {
+                power_unit = (*it).GetUnitType();
+
+                if (!fuel_mining_capacity.fuel && (*it).GetComplex()) {
+                    (*it).GetComplex()->GetCargoMining(fuel_mining, fuel_mining_capacity);
+                }
+
+            } else if ((*it).GetOrder() == ORDER_BUILD && (*it).build_list.GetCount() > 0) {
+                power_unit = (*it).GetConstructedUnitType();
+            }
+
+            if (power_unit != INVALID_ID) {
+                const int32_t rate = Cargo_GetPowerConsumptionRate(power_unit);
+
+                if (rate > 0) {
+                    power_needed += rate;
+
+                } else {
+                    power_generated -= rate;
+                    generators += power_unit == POWGEN;
+                }
             }
         }
     }
@@ -758,7 +778,12 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
         // the game only offers buildings that make sense now
         if (unit_type == POWGEN) {
-            if (spare_power > 0 || spare_fuel < Cargo_GetFuelConsumptionRate(POWGEN)) {
+            // a factory needs power too, plan for the first one
+            const int32_t factory_power =
+                (CountOwnUnits(LANDPLT) + CountOwnUnits(LIGHTPLT) == 0) ? Cargo_GetPowerConsumptionRate(LANDPLT) : 0;
+
+            if (power_needed + factory_power <= power_generated ||
+                fuel_mining_capacity.fuel < (generators + 1) * Cargo_GetFuelConsumptionRate(POWGEN)) {
                 continue;
             }
 
@@ -822,8 +847,9 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             if (unit_type == POWGEN) {
                 facts += ", burns " + std::to_string(Cargo_GetFuelConsumptionRate(POWGEN)) + " fuel per turn for " +
                          std::to_string(-Cargo_GetPowerConsumptionRate(POWGEN)) +
-                         " power; the base has no spare power and mines " + std::to_string(spare_fuel) +
-                         " spare fuel per turn";
+                         " power; your buildings, with those being built, need " + std::to_string(power_needed) +
+                         " power and your generators give " + std::to_string(power_generated) + ", the base mines " +
+                         std::to_string(fuel_mining_capacity.fuel) + " fuel per turn at most";
 
             } else if (Cargo_GetPowerConsumptionRate(unit_type) > 0) {
                 facts += ", needs " + std::to_string(Cargo_GetPowerConsumptionRate(unit_type)) + " power";
@@ -995,8 +1021,8 @@ void JevAi::AddAttackOptions(UnitInfo* unit) {
         for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
             UnitInfo& target = *it;
 
-            if (target.team == m_team || target.hits == 0 || !target.IsVisibleToTeam(m_team) ||
-                target.GetUnitType() == CNCT_4W || target.GetUnitType() == ROAD ||
+            if (target.team == m_team || target.team == PLAYER_TEAM_ALIEN || target.hits == 0 ||
+                !target.IsVisibleToTeam(m_team) || target.GetUnitType() == CNCT_4W || target.GetUnitType() == ROAD ||
                 !Access_IsValidAttackTarget(unit, &target)) {
                 continue;
             }
@@ -1065,7 +1091,7 @@ json JevAi::GetState(UnitInfo* unit) const {
                 factories += JevAi_IsFactory((*it).GetUnitType());
                 combat_units += !((*it).flags & STATIONARY) && JevAi_IsGroundCombatUnit(m_team, (*it).GetUnitType());
 
-            } else if ((*it).IsVisibleToTeam(m_team)) {
+            } else if ((*it).team != PLAYER_TEAM_ALIEN && (*it).IsVisibleToTeam(m_team)) {
                 ++enemies_seen;
 
                 if ((*it).GetUnitType() != CNCT_4W && (*it).GetUnitType() != ROAD) {
