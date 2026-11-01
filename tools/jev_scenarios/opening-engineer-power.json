@@ -1,0 +1,114 @@
+{
+ "id": "opening-engineer-power",
+ "source": "runs/parity-mock/questions.jsonl#1",
+ "why": "turn 1, the base has no spare power for a factory: an Engineer builds a Power Generator",
+ "label": "agent",
+ "holdout": false,
+ "expect": {
+  "acceptable": [
+   {
+    "action": "build",
+    "type": "Power Generator"
+   }
+  ],
+  "forbidden": []
+ },
+ "request": {
+  "id": 2,
+  "team": "red",
+  "state": {
+   "game": "M.A.X., turn-based strategy",
+   "turn": 1,
+   "you": {
+    "type": "Engineer",
+    "position": [
+     32,
+     26
+    ],
+    "hits": 14,
+    "max_hits": 14,
+    "moves_left": 6,
+    "danger_here": 0,
+    "materials_carried": 12,
+    "materials_capacity": 40
+   },
+   "score": {
+    "your_points": 0,
+    "best_enemy_points": 0,
+    "turns_left": 39
+   },
+   "team": {
+    "factories": 0,
+    "constructors": 1,
+    "engineers": 2,
+    "combat_units": 1
+   },
+   "mining_per_turn": {
+    "raw": 12,
+    "fuel": 4,
+    "gold": 0
+   },
+   "base": {
+    "raw": 0,
+    "raw_capacity": 25,
+    "fuel": 0,
+    "fuel_capacity": 0,
+    "gold": 0,
+    "power_left": 0,
+    "workers_left": 0
+   },
+   "buildings": {
+    "Mining Station": 1,
+    "Power Generator": 1
+   },
+   "units": {
+    "Assault Gun": 1,
+    "Scout": 1,
+    "Engineer": 2,
+    "Surveyor": 1,
+    "Constructor": 1
+   },
+   "explored_cells": 253,
+   "map_cells": 12544,
+   "enemies_seen": 0,
+   "units_lost": 0
+  },
+  "questions": {
+   "construction": {
+    "type": "choice",
+    "instructions": "",
+    "criteria": {}
+   }
+  },
+  "options": {
+   "b0": {
+    "action": "build",
+    "type": "Power Generator",
+    "at": [
+     32,
+     26
+    ],
+    "purpose": {
+     "type": "Power Generator",
+     "key": "POWGEN"
+    },
+    "turns": 4,
+    "cost": 8,
+    "carried": 12,
+    "have": 1,
+    "joins_base": true,
+    "generator": {
+     "burns_fuel": 2,
+     "gives_power": 1,
+     "power_needed": 1,
+     "power_generated": 1,
+     "fuel_mined_max": 8
+    }
+   },
+   "stay": {
+    "action": "stay",
+    "danger": 0
+   }
+  }
+ }
+}

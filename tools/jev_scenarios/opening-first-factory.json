@@ -1,0 +1,186 @@
+{
+ "id": "opening-first-factory",
+ "source": "runs/parity-mock/questions.jsonl#3",
+ "why": "turn 1, no factory: a factory comes first, it makes combat units and replaces builders",
+ "label": "agent",
+ "holdout": false,
+ "expect": {
+  "acceptable": [
+   {
+    "action": "build",
+    "type": "Heavy Vehicle Plant"
+   },
+   {
+    "action": "build",
+    "type": "Light Vehicle Plant"
+   }
+  ],
+  "forbidden": [
+   {
+    "action": "stay"
+   }
+  ]
+ },
+ "request": {
+  "id": 4,
+  "team": "red",
+  "state": {
+   "game": "M.A.X., turn-based strategy",
+   "turn": 1,
+   "you": {
+    "type": "Constructor",
+    "position": [
+     32,
+     25
+    ],
+    "hits": 24,
+    "max_hits": 24,
+    "moves_left": 6,
+    "danger_here": 0,
+    "materials_carried": 40,
+    "materials_capacity": 60
+   },
+   "score": {
+    "your_points": 0,
+    "best_enemy_points": 0,
+    "turns_left": 39
+   },
+   "team": {
+    "factories": 0,
+    "constructors": 1,
+    "engineers": 2,
+    "combat_units": 1
+   },
+   "mining_per_turn": {
+    "raw": 12,
+    "fuel": 4,
+    "gold": 0
+   },
+   "base": {
+    "raw": 0,
+    "raw_capacity": 25,
+    "fuel": 0,
+    "fuel_capacity": 0,
+    "gold": 0,
+    "power_left": 0,
+    "workers_left": 0
+   },
+   "buildings": {
+    "Mining Station": 1,
+    "Power Generator": 1
+   },
+   "units": {
+    "Assault Gun": 1,
+    "Scout": 1,
+    "Engineer": 2,
+    "Surveyor": 1,
+    "Constructor": 1
+   },
+   "explored_cells": 277,
+   "map_cells": 12544,
+   "enemies_seen": 0,
+   "units_lost": 0
+  },
+  "questions": {
+   "construction": {
+    "type": "choice",
+    "instructions": "",
+    "criteria": {}
+   }
+  },
+  "options": {
+   "b0": {
+    "action": "build",
+    "type": "Mining Station",
+    "at": [
+     35,
+     25
+    ],
+    "purpose": {
+     "type": "Mining Station",
+     "key": "MININGST"
+    },
+    "turns": 12,
+    "cost": 24,
+    "carried": 40,
+    "have": 1,
+    "walks_there": true,
+    "resources": {
+     "raw": 2,
+     "fuel": 3,
+     "gold": 0
+    }
+   },
+   "b1": {
+    "action": "build",
+    "type": "Light Vehicle Plant",
+    "at": [
+     32,
+     24
+    ],
+    "purpose": {
+     "type": "Light Vehicle Plant",
+     "key": "LIGHTPLT",
+     "factory": {
+      "combat": [],
+      "other": [
+       "Scout",
+       "Surveyor",
+       "Engineer",
+       "Repair Unit",
+       "Supply Truck",
+       "Fuel Truck",
+       "Gold Truck",
+       "Mobile Anti Aircraft",
+       "Mine Layer",
+       "Bulldozer",
+       "Personnel Carrier"
+      ]
+     }
+    },
+    "turns": 10,
+    "cost": 20,
+    "carried": 40,
+    "have": 0,
+    "joins_base": true,
+    "needs_power": 1,
+    "power_spare": 0
+   },
+   "b2": {
+    "action": "build",
+    "type": "Heavy Vehicle Plant",
+    "at": [
+     32,
+     24
+    ],
+    "purpose": {
+     "type": "Heavy Vehicle Plant",
+     "key": "LANDPLT",
+     "factory": {
+      "combat": [
+       "Tank",
+       "Assault Gun",
+       "Rocket Launcher",
+       "Missile Crawler"
+      ],
+      "other": [
+       "Constructor",
+       "Scanner"
+      ]
+     }
+    },
+    "turns": 20,
+    "cost": 40,
+    "carried": 40,
+    "have": 0,
+    "joins_base": true,
+    "needs_power": 1,
+    "power_spare": 0
+   },
+   "stay": {
+    "action": "stay",
+    "danger": 0
+   }
+  }
+ }
+}

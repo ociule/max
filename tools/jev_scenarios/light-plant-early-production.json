@@ -1,0 +1,288 @@
+{
+ "id": "light-plant-early-production",
+ "source": "runs/parity-mock/questions.jsonl#39",
+ "why": "turn 11, the Light Vehicle Plant cannot make Constructors: more Engineers and Surveyors grow the base, a Scout finds the enemy; trucks, bulldozers and carriers are not needed yet",
+ "label": "unsure",
+ "holdout": false,
+ "expect": {
+  "acceptable": [
+   {
+    "action": "produce",
+    "type": "Engineer"
+   },
+   {
+    "action": "produce",
+    "type": "Surveyor"
+   },
+   {
+    "action": "produce",
+    "type": "Scout"
+   }
+  ],
+  "forbidden": [
+   {
+    "action": "produce",
+    "type": "Bulldozer"
+   },
+   {
+    "action": "produce",
+    "type": "Gold Truck"
+   },
+   {
+    "action": "produce",
+    "type": "Personnel Carrier"
+   }
+  ]
+ },
+ "request": {
+  "id": 40,
+  "team": "red",
+  "state": {
+   "game": "M.A.X., turn-based strategy",
+   "turn": 11,
+   "you": {
+    "type": "Light Vehicle Plant",
+    "position": [
+     32,
+     24
+    ],
+    "hits": 56,
+    "max_hits": 56
+   },
+   "score": {
+    "your_points": 0,
+    "best_enemy_points": 0,
+    "turns_left": 29
+   },
+   "team": {
+    "factories": 1,
+    "constructors": 1,
+    "engineers": 2,
+    "combat_units": 0
+   },
+   "mining_per_turn": {
+    "raw": 10,
+    "fuel": 6,
+    "gold": 0
+   },
+   "base": {
+    "raw": 25,
+    "raw_capacity": 25,
+    "fuel": 0,
+    "fuel_capacity": 0,
+    "gold": 0,
+    "power_left": 0,
+    "workers_left": 0
+   },
+   "buildings": {
+    "Light Vehicle Plant": 1,
+    "Power Generator": 3,
+    "Mining Station": 1
+   },
+   "units": {
+    "Scout": 1,
+    "Engineer": 2,
+    "Surveyor": 1,
+    "Constructor": 1
+   },
+   "explored_cells": 2432,
+   "map_cells": 12544,
+   "enemies_seen": 0,
+   "units_lost": 1
+  },
+  "questions": {
+   "production": {
+    "type": "choice",
+    "instructions": "",
+    "criteria": {}
+   }
+  },
+  "options": {
+   "p0": {
+    "action": "produce",
+    "type": "Scout",
+    "purpose": {
+     "type": "Scout",
+     "key": "SCOUT"
+    },
+    "turns": 3,
+    "cost": 9,
+    "stats": {
+     "attack": 14,
+     "range": 3,
+     "hits": 16,
+     "armor": 4,
+     "speed": 14
+    },
+    "have": 1
+   },
+   "p1": {
+    "action": "produce",
+    "type": "Surveyor",
+    "purpose": {
+     "type": "Surveyor",
+     "key": "SURVEYOR"
+    },
+    "turns": 3,
+    "cost": 9,
+    "stats": {
+     "hits": 16,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 1
+   },
+   "p2": {
+    "action": "produce",
+    "type": "Engineer",
+    "purpose": {
+     "type": "Engineer",
+     "key": "ENGINEER"
+    },
+    "turns": 6,
+    "cost": 18,
+    "stats": {
+     "hits": 14,
+     "armor": 4,
+     "speed": 6
+    },
+    "have": 2
+   },
+   "p3": {
+    "action": "produce",
+    "type": "Repair Unit",
+    "purpose": {
+     "type": "Repair Unit",
+     "key": "REPAIR"
+    },
+    "turns": 5,
+    "cost": 15,
+    "stats": {
+     "hits": 20,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 0
+   },
+   "p4": {
+    "action": "produce",
+    "type": "Supply Truck",
+    "purpose": {
+     "type": "Supply Truck",
+     "key": "SPLYTRCK"
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "hits": 24,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 0
+   },
+   "p5": {
+    "action": "produce",
+    "type": "Fuel Truck",
+    "purpose": {
+     "type": "Fuel Truck",
+     "key": "FUELTRCK"
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "hits": 20,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 0
+   },
+   "p6": {
+    "action": "produce",
+    "type": "Gold Truck",
+    "purpose": {
+     "type": "Gold Truck",
+     "key": "GOLDTRCK"
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "hits": 24,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 0
+   },
+   "p7": {
+    "action": "produce",
+    "type": "Mobile Anti Aircraft",
+    "purpose": {
+     "type": "Mobile Anti Aircraft",
+     "key": "SP_FLAK"
+    },
+    "turns": 6,
+    "cost": 18,
+    "stats": {
+     "attack": 22,
+     "range": 8,
+     "hits": 24,
+     "armor": 4,
+     "speed": 9
+    },
+    "have": 0
+   },
+   "p8": {
+    "action": "produce",
+    "type": "Mine Layer",
+    "purpose": {
+     "type": "Mine Layer",
+     "key": "MINELAYR"
+    },
+    "turns": 3,
+    "cost": 9,
+    "stats": {
+     "hits": 24,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 0
+   },
+   "p9": {
+    "action": "produce",
+    "type": "Bulldozer",
+    "purpose": {
+     "type": "Bulldozer",
+     "key": "BULLDOZR"
+    },
+    "turns": 5,
+    "cost": 15,
+    "stats": {
+     "hits": 14,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 0
+   },
+   "p10": {
+    "action": "produce",
+    "type": "Personnel Carrier",
+    "purpose": {
+     "type": "Personnel Carrier",
+     "key": ""
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "hits": 24,
+     "armor": 8,
+     "speed": 10
+    },
+    "have": 0
+   },
+   "nothing": {
+    "action": "produce_nothing",
+    "base_raw": 25,
+    "base_raw_capacity": 25
+   }
+  }
+ }
+}
