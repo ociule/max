@@ -57,7 +57,16 @@ class JevAi final : public NoneAi {
         int32_t score;
     };
 
+    /// A building site a builder is still walking to.
+    struct Site {
+        uint16_t unit_id;
+        ResourceID unit_type;
+        Point site;
+        int32_t turn;
+    };
+
     State m_state{State::SELECT};
+    std::vector<Site> m_sites;
     std::vector<SmartPointer<UnitInfo>> m_units;
     std::vector<SmartPointer<UnitInfo>> m_handled;
     std::vector<uint16_t> m_lost;
@@ -105,6 +114,8 @@ class JevAi final : public NoneAi {
     bool Ask(UnitInfo* unit, const char* instructions);
     void Apply(const std::string& answer);
     void StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site);
+    void WalkToSite(ResourceID unit_type, Point site);
+    bool ContinueToSite();
     void FinishUnit();
     const char* GetTeamName() const;
 
