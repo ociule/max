@@ -105,6 +105,21 @@ static int32_t JevAi_GetDistance(Point a, Point b) {
     return static_cast<int32_t>(SDL_sqrt(Access_GetSquaredDistance(a, b)));
 }
 
+/// Every cell of a building site must be free, not only the top left one.
+static bool JevAi_IsSiteFree(uint16_t team, ResourceID unit_type, Point site) {
+    const int32_t size = (ResourceManager_GetUnit(unit_type).GetFlags() & BUILDING) ? 2 : 1;
+
+    for (int32_t x = site.x; x < site.x + size; ++x) {
+        for (int32_t y = site.y; y < site.y + size; ++y) {
+            if (!Access_IsAccessible(unit_type, team, x, y, AccessModifier_EnemySameClassBlocks)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 static bool JevAi_IsFactory(ResourceID unit_type) {
     return unit_type == LIGHTPLT || unit_type == LANDPLT || unit_type == SHIPYARD || unit_type == AIRPLT ||
            unit_type == TRAINHAL;
@@ -423,8 +438,7 @@ bool JevAi::FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) 
                 continue;
             }
 
-            if (!Access_IsAccessible(unit_type, m_team, candidate.x, candidate.y,
-                                     AccessModifier_EnemySameClassBlocks)) {
+            if (!JevAi_IsSiteFree(m_team, unit_type, candidate)) {
                 continue;
             }
 
@@ -1539,9 +1553,7 @@ bool JevAi::CheckEndTurn() {
                 const Point site = m_pending_build.destination;
 
                 if (is_idle && m_unit->grid_x >= site.x && m_unit->grid_x < site.x + size && m_unit->grid_y >= site.y &&
-                    m_unit->grid_y < site.y + size &&
-                    Access_IsAccessible(m_pending_build.unit_type, m_team, site.x, site.y,
-                                        AccessModifier_EnemySameClassBlocks)) {
+                    m_unit->grid_y < site.y + size && JevAi_IsSiteFree(m_team, m_pending_build.unit_type, site)) {
                     StartBuilding(&*m_unit, m_pending_build.unit_type, site);
 
                 } else {
