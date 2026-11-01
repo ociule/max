@@ -55,6 +55,8 @@ class JevAi final : public NoneAi {
         SmartPointer<UnitInfo> target;
         std::string facts;
         int32_t score;
+        /// The facts as data, for the bridge's prompt templates.
+        nlohmann::ordered_json data;
     };
 
     /// A building site a builder is still walking to.

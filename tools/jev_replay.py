@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import jev_bridge  # noqa: E402
+import jev_bridge
 
 SOURCE = jev_bridge.ROOT / 'src' / 'jevai.cpp'
 
