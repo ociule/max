@@ -360,7 +360,8 @@ void CommandLine_LogTurn(int32_t turn) {
         if (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE) {
             line += std::string(" ") + CommandLine_TeamNames[team] + " units " + std::to_string(units[team]) + " (" +
                     std::to_string(tasked[team]) + " with classic tasks) buildings " + std::to_string(buildings[team]) +
-                    " points " + std::to_string(UnitsManager_TeamInfo[team].team_points);
+                    " points " + std::to_string(UnitsManager_TeamInfo[team].team_points) + " worth " +
+                    std::to_string(WinLoss_GetTotalWorthOfAssets(team));
 
             AiController* controller = AiController_Get(team);
 
@@ -392,7 +393,9 @@ bool CommandLine_LogResult(const WinLoss_Status& status, int32_t turn) {
             }
 
             line += std::string(" ") + CommandLine_TeamNames[team] + " rank " + std::to_string(status.team_rank[team]) +
-                    ", units built " + std::to_string(info.stats_units_built) + ", buildings built " +
+                    ", points " + std::to_string(info.team_points) + ", worth " +
+                    std::to_string(WinLoss_GetTotalWorthOfAssets(team)) + ", units built " +
+                    std::to_string(info.stats_units_built) + ", buildings built " +
                     std::to_string(info.stats_buildings_built) + ", factories built " +
                     std::to_string(info.stats_factories_built) + ", mines built " +
                     std::to_string(info.stats_mines_built) + ", units and buildings lost " + std::to_string(losses) +
