@@ -641,7 +641,8 @@ void JevAi::BalanceEconomy() {
         for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
              ++it) {
             if ((*it).GetComplex() == complex && (*it).GetUnitType() == GREENHSE && (*it).hits > 0 &&
-                (*it).GetOrder() == ORDER_POWER_OFF && power_left >= Cargo_GetPowerConsumptionRate(GREENHSE) &&
+                ((*it).GetOrder() == ORDER_POWER_OFF || (*it).GetOrder() == ORDER_AWAIT) &&
+                power_left >= Cargo_GetPowerConsumptionRate(GREENHSE) &&
                 workers_left >= Cargo_GetLifeConsumptionRate(GREENHSE)) {
                 UnitsManager_SetNewOrder(it->Get(), ORDER_POWER_ON, ORDER_STATE_INIT);
 
