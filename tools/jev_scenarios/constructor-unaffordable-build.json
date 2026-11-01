@@ -1,0 +1,219 @@
+{
+ "id": "constructor-unaffordable-build",
+ "source": "runs/parity-mock/questions.jsonl#38",
+ "why": "carries 20: build what 20 pays for (a Habitat after the first factory) or refill, not a building it cannot pay for",
+ "label": "agent",
+ "holdout": false,
+ "expect": {
+  "acceptable": [
+   {
+    "action": "build",
+    "type": "Habitat"
+   },
+   {
+    "action": "go_refill"
+   }
+  ],
+  "forbidden": [
+   {
+    "action": "build",
+    "not_enough_materials": true
+   }
+  ]
+ },
+ "request": {
+  "id": 39,
+  "team": "red",
+  "state": {
+   "game": "M.A.X., turn-based strategy",
+   "turn": 11,
+   "you": {
+    "type": "Constructor",
+    "position": [
+     31,
+     25
+    ],
+    "hits": 24,
+    "max_hits": 24,
+    "moves_left": 5,
+    "danger_here": 0,
+    "materials_carried": 20,
+    "materials_capacity": 60
+   },
+   "score": {
+    "your_points": 0,
+    "best_enemy_points": 0,
+    "turns_left": 29
+   },
+   "team": {
+    "factories": 1,
+    "constructors": 1,
+    "engineers": 2,
+    "combat_units": 0
+   },
+   "mining_per_turn": {
+    "raw": 0,
+    "fuel": 0,
+    "gold": 0
+   },
+   "base": {
+    "raw": 0,
+    "raw_capacity": 0,
+    "fuel": 0,
+    "fuel_capacity": 0,
+    "gold": 0,
+    "power_left": 0,
+    "workers_left": 0
+   },
+   "buildings": {
+    "Light Vehicle Plant": 1,
+    "Power Generator": 3,
+    "Mining Station": 1
+   },
+   "units": {
+    "Scout": 1,
+    "Engineer": 2,
+    "Surveyor": 1,
+    "Constructor": 1
+   },
+   "explored_cells": 2432,
+   "map_cells": 12544,
+   "enemies_seen": 0,
+   "units_lost": 1
+  },
+  "questions": {
+   "construction": {
+    "type": "choice",
+    "instructions": "",
+    "criteria": {}
+   }
+  },
+  "options": {
+   "b0": {
+    "action": "build",
+    "type": "Mining Station",
+    "at": [
+     35,
+     25
+    ],
+    "purpose": {
+     "type": "Mining Station",
+     "key": "MININGST"
+    },
+    "turns": 12,
+    "cost": 24,
+    "carried": 20,
+    "have": 1,
+    "walks_there": true,
+    "resources": {
+     "raw": 2,
+     "fuel": 3,
+     "gold": 0
+    },
+    "not_enough_materials": true
+   },
+   "b1": {
+    "action": "build",
+    "type": "Light Vehicle Plant",
+    "at": [
+     30,
+     24
+    ],
+    "purpose": {
+     "type": "Light Vehicle Plant",
+     "key": "LIGHTPLT",
+     "factory": {
+      "combat": [],
+      "other": [
+       "Scout",
+       "Surveyor",
+       "Engineer",
+       "Repair Unit",
+       "Supply Truck",
+       "Fuel Truck",
+       "Gold Truck",
+       "Mobile Anti Aircraft",
+       "Mine Layer",
+       "Bulldozer",
+       "Personnel Carrier"
+      ]
+     }
+    },
+    "turns": 10,
+    "cost": 20,
+    "carried": 20,
+    "have": 1,
+    "joins_base": true,
+    "needs_power": 1,
+    "power_spare": 0
+   },
+   "b2": {
+    "action": "build",
+    "type": "Heavy Vehicle Plant",
+    "at": [
+     30,
+     24
+    ],
+    "purpose": {
+     "type": "Heavy Vehicle Plant",
+     "key": "LANDPLT",
+     "factory": {
+      "combat": [
+       "Tank",
+       "Assault Gun",
+       "Rocket Launcher",
+       "Missile Crawler"
+      ],
+      "other": [
+       "Constructor",
+       "Scanner"
+      ]
+     }
+    },
+    "turns": 20,
+    "cost": 40,
+    "carried": 20,
+    "have": 0,
+    "joins_base": true,
+    "needs_power": 1,
+    "power_spare": 0,
+    "not_enough_materials": true
+   },
+   "b3": {
+    "action": "build",
+    "type": "Habitat",
+    "at": [
+     30,
+     24
+    ],
+    "purpose": {
+     "type": "Habitat",
+     "key": "HABITAT"
+    },
+    "turns": 10,
+    "cost": 20,
+    "carried": 20,
+    "have": 0,
+    "joins_base": true,
+    "gives_workers": 3,
+    "workers_spare": 0
+   },
+   "g4": {
+    "action": "go_refill",
+    "to_building": "Mining Station",
+    "to": [
+     33,
+     28
+    ],
+    "distance": 3,
+    "carried": 20,
+    "capacity": 60,
+    "base_raw": 25
+   },
+   "stay": {
+    "action": "stay",
+    "danger": 0
+   }
+  }
+ }
+}

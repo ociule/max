@@ -1,0 +1,296 @@
+{
+ "id": "scout-escapes-danger",
+ "source": "runs/parity-mock/questions.jsonl#64",
+ "why": "danger 56 is more than the Scout's 16 hits: leave to a cell with danger 0",
+ "label": "agent",
+ "holdout": false,
+ "expect": {
+  "acceptable": [
+   {
+    "action": "move",
+    "danger<": 1
+   }
+  ],
+  "forbidden": [
+   {
+    "action": "stay"
+   },
+   {
+    "action": "move",
+    "danger>": 15
+   }
+  ]
+ },
+ "request": {
+  "id": 65,
+  "team": "red",
+  "state": {
+   "game": "M.A.X., turn-based strategy",
+   "turn": 17,
+   "you": {
+    "type": "Scout",
+    "position": [
+     93,
+     49
+    ],
+    "hits": 16,
+    "max_hits": 16,
+    "moves_left": 14,
+    "danger_here": 56,
+    "distance_to_base": 65,
+    "distance_to_nearest_builder": 62
+   },
+   "base_position": [
+    32,
+    24
+   ],
+   "army": {
+    "combat_units": 0,
+    "builders": 3
+   },
+   "nearest_enemies": [],
+   "enemies_seen": 0,
+   "explored_cells": 3598,
+   "map_cells": 12544,
+   "units_lost": 1
+  },
+  "questions": {
+   "military": {
+    "type": "choice",
+    "instructions": "",
+    "criteria": {}
+   }
+  },
+  "options": {
+   "m0": {
+    "action": "move",
+    "direction": "N",
+    "distance": 7,
+    "to": [
+     93,
+     42
+    ],
+    "revealed": 121,
+    "danger": 0,
+    "from_base": 63,
+    "from_builder": 60,
+    "nearest_enemy": 10
+   },
+   "m1": {
+    "action": "move",
+    "direction": "N",
+    "distance": 14,
+    "to": [
+     93,
+     35
+    ],
+    "revealed": 220,
+    "danger": 0,
+    "from_base": 61,
+    "from_builder": 58,
+    "nearest_enemy": 16
+   },
+   "m2": {
+    "action": "move",
+    "direction": "NE",
+    "distance": 4,
+    "to": [
+     97,
+     45
+    ],
+    "revealed": 97,
+    "danger": 28,
+    "from_base": 68,
+    "from_builder": 65,
+    "nearest_enemy": 5
+   },
+   "m3": {
+    "action": "move",
+    "direction": "NE",
+    "distance": 9,
+    "to": [
+     102,
+     40
+    ],
+    "revealed": 189,
+    "danger": 0,
+    "from_base": 71,
+    "from_builder": 68,
+    "nearest_enemy": 9
+   },
+   "m4": {
+    "action": "move",
+    "direction": "E",
+    "distance": 7,
+    "to": [
+     100,
+     49
+    ],
+    "revealed": 105,
+    "danger": 56,
+    "from_base": 72,
+    "from_builder": 69,
+    "nearest_enemy": 1
+   },
+   "m5": {
+    "action": "move",
+    "direction": "E",
+    "distance": 14,
+    "to": [
+     107,
+     49
+    ],
+    "revealed": 181,
+    "danger": 28,
+    "from_base": 79,
+    "from_builder": 75,
+    "nearest_enemy": 6
+   },
+   "m6": {
+    "action": "move",
+    "direction": "SE",
+    "distance": 4,
+    "to": [
+     97,
+     53
+    ],
+    "revealed": 49,
+    "danger": 56,
+    "from_base": 71,
+    "from_builder": 68,
+    "nearest_enemy": 1
+   },
+   "m7": {
+    "action": "move",
+    "direction": "SE",
+    "distance": 9,
+    "to": [
+     102,
+     58
+    ],
+    "revealed": 162,
+    "danger": 28,
+    "from_base": 77,
+    "from_builder": 74,
+    "nearest_enemy": 6
+   },
+   "m8": {
+    "action": "move",
+    "direction": "S",
+    "distance": 7,
+    "to": [
+     93,
+     56
+    ],
+    "revealed": 23,
+    "danger": 28,
+    "from_base": 68,
+    "from_builder": 65,
+    "nearest_enemy": 4
+   },
+   "m9": {
+    "action": "move",
+    "direction": "S",
+    "distance": 14,
+    "to": [
+     93,
+     63
+    ],
+    "revealed": 136,
+    "danger": 0,
+    "from_base": 72,
+    "from_builder": 69,
+    "nearest_enemy": 9
+   },
+   "m10": {
+    "action": "move",
+    "direction": "SW",
+    "distance": 4,
+    "to": [
+     89,
+     53
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "from_base": 63,
+    "from_builder": 60,
+    "nearest_unexplored": 9,
+    "nearest_enemy": 8
+   },
+   "m11": {
+    "action": "move",
+    "direction": "SW",
+    "distance": 9,
+    "to": [
+     84,
+     58
+    ],
+    "revealed": 34,
+    "danger": 0,
+    "from_base": 62,
+    "from_builder": 59,
+    "nearest_enemy": 13
+   },
+   "m12": {
+    "action": "move",
+    "direction": "W",
+    "distance": 7,
+    "to": [
+     86,
+     49
+    ],
+    "revealed": 29,
+    "danger": 0,
+    "from_base": 59,
+    "from_builder": 56,
+    "nearest_enemy": 12
+   },
+   "m13": {
+    "action": "move",
+    "direction": "W",
+    "distance": 14,
+    "to": [
+     79,
+     49
+    ],
+    "revealed": 48,
+    "danger": 0,
+    "from_base": 53,
+    "from_builder": 50,
+    "nearest_enemy": 18
+   },
+   "m14": {
+    "action": "move",
+    "direction": "NW",
+    "distance": 4,
+    "to": [
+     89,
+     45
+    ],
+    "revealed": 74,
+    "danger": 0,
+    "from_base": 60,
+    "from_builder": 57,
+    "nearest_enemy": 12
+   },
+   "m15": {
+    "action": "move",
+    "direction": "NW",
+    "distance": 9,
+    "to": [
+     84,
+     40
+    ],
+    "revealed": 181,
+    "danger": 0,
+    "from_base": 54,
+    "from_builder": 51,
+    "nearest_enemy": 19
+   },
+   "stay": {
+    "action": "stay",
+    "danger": 56
+   }
+  }
+ }
+}
