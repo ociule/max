@@ -53,6 +53,9 @@ static constexpr uint64_t JevAi_AnswerTimeout = 15000;
 /// Milliseconds to wait for a move, a build start or a release to finish.
 static constexpr uint64_t JevAi_UnitTimeout = 30000;
 
+/// Turns a builder keeps walking to a chosen building site.
+static constexpr int32_t JevAi_SiteWalkTurns = 3;
+
 /// Cells around a builder searched for building sites.
 static constexpr int32_t JevAi_SiteSearchRadius = 6;
 
@@ -1261,6 +1264,55 @@ void JevAi::StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site) {
     ++m_turn_builds;
 }
 
+void JevAi::WalkToSite(ResourceID unit_type, Point site) {
+    m_pending_build = {"", Action::BUILD, site, unit_type, nullptr, "", 0};
+    m_has_pending_build = true;
+    m_move_start = Point(m_unit->grid_x, m_unit->grid_y);
+    m_unit->move_to_grid_x = site.x;
+    m_unit->move_to_grid_y = site.y;
+
+    UnitsManager_SetNewOrder(&*m_unit, ORDER_MOVE, ORDER_STATE_INIT);
+
+    m_wait_start = SDL_GetTicks();
+    m_state = State::WAIT_FOR_UNIT;
+}
+
+bool JevAi::ContinueToSite() {
+    auto entry = std::find_if(m_sites.begin(), m_sites.end(),
+                              [this](const Site& item) { return item.unit_id == m_unit->unit_id; });
+
+    if (entry == m_sites.end()) {
+        return false;
+    }
+
+    const Site site = *entry;
+    const int32_t size = JevAi_GetSize(site.unit_type);
+    const bool on_site = m_unit->grid_x >= site.site.x && m_unit->grid_x < site.site.x + size &&
+                         m_unit->grid_y >= site.site.y && m_unit->grid_y < site.site.y + size;
+
+    m_sites.erase(entry);
+
+    if (!JevAi_IsSiteFree(m_team, site.unit_type, site.site) ||
+        GameManager_TurnCounter - site.turn > JevAi_SiteWalkTurns) {
+        SDL_Log("Jev %s: %s gives up the %s site at %s.", GetTeamName(), JevAi_GetUnitName(&*m_unit).c_str(),
+                JevAi_GetTypeName(site.unit_type).c_str(), JevAi_FormatPoint(site.site).c_str());
+
+        return false;
+    }
+
+    if (on_site) {
+        StartBuilding(&*m_unit, site.unit_type, site.site);
+        FinishUnit();
+
+    } else {
+        m_sites.push_back(site);
+
+        WalkToSite(site.unit_type, site.site);
+    }
+
+    return true;
+}
+
 void JevAi::Apply(const std::string& answer) {
     std::string choice;
     std::string model = "?";
@@ -1324,16 +1376,9 @@ void JevAi::Apply(const std::string& answer) {
                 FinishUnit();
 
             } else {
-                m_pending_build = *option;
-                m_has_pending_build = true;
-                m_move_start = Point(m_unit->grid_x, m_unit->grid_y);
-                m_unit->move_to_grid_x = option->destination.x;
-                m_unit->move_to_grid_y = option->destination.y;
+                m_sites.push_back({m_unit->unit_id, option->unit_type, option->destination, GameManager_TurnCounter});
 
-                UnitsManager_SetNewOrder(&*m_unit, ORDER_MOVE, ORDER_STATE_INIT);
-
-                m_wait_start = SDL_GetTicks();
-                m_state = State::WAIT_FOR_UNIT;
+                WalkToSite(option->unit_type, option->destination);
             }
         } break;
 
@@ -1404,6 +1449,7 @@ void JevAi::BeginTurn() {
         m_explored_cells = 0;
         m_units_lost = 0;
         m_lost.clear();
+        m_sites.clear();
     }
 
     m_last_turn = GameManager_TurnCounter;
@@ -1554,11 +1600,18 @@ bool JevAi::CheckEndTurn() {
 
                 if (is_idle && m_unit->grid_x >= site.x && m_unit->grid_x < site.x + size && m_unit->grid_y >= site.y &&
                     m_unit->grid_y < site.y + size && JevAi_IsSiteFree(m_team, m_pending_build.unit_type, site)) {
+                    const uint16_t unit_id = m_unit->unit_id;
+
+                    m_sites.erase(std::remove_if(m_sites.begin(), m_sites.end(),
+                                                 [unit_id](const Site& item) { return item.unit_id == unit_id; }),
+                                  m_sites.end());
+
                     StartBuilding(&*m_unit, m_pending_build.unit_type, site);
 
                 } else {
-                    SDL_Log("Jev %s: %s did not reach the %s site.", GetTeamName(), JevAi_GetUnitName(&*m_unit).c_str(),
-                            JevAi_GetTypeName(m_pending_build.unit_type).c_str());
+                    // moves can wait for a path or for a unit in the way; keep going next turn
+                    SDL_Log("Jev %s: %s is on its way to the %s site.", GetTeamName(),
+                            JevAi_GetUnitName(&*m_unit).c_str(), JevAi_GetTypeName(m_pending_build.unit_type).c_str());
                 }
 
                 FinishUnit();
@@ -1653,6 +1706,10 @@ bool JevAi::CheckEndTurn() {
             }
 
             const int32_t danger_here = GetDanger(&*m_unit, Point(m_unit->grid_x, m_unit->grid_y), nullptr);
+
+            if (ContinueToSite()) {
+                return true;
+            }
 
             const bool is_construction = JevAi_IsConstructionUnit(m_unit->GetUnitType());
 
