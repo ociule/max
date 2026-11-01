@@ -63,15 +63,19 @@ static const char* const JevAi_DirectionNames[8] = {"N", "NE", "E", "SE", "S", "
 
 static const char* const JevAi_ConstructionInstructions =
     "You manage construction for your team in M.A.X., a turn-based strategy game on a map of square cells. Military "
-    "units are commanded separately; your job is the economy and production that feed them. Choose what this unit "
-    "does now. Rules, most important first: 1. If your team has no factory, building one comes first; the Heavy "
+    "units are commanded separately; your job is the economy and production that feed them. The game ends at a turn "
+    "limit: the team with the most points wins, a tie goes to the team with the most valuable units and buildings, "
+    "and a team with no Constructor and no factory is eliminated. Each working Eco-sphere scores 1 point every turn, "
+    "so Eco-spheres built early score the most. Choose what this unit does now. Rules, most important first: 1. If "
+    "your team has no factory, building one comes first; the Heavy "
     "Vehicle Plant is the only factory that makes tanks and other strong combat units, and new Constructors. 2. A "
     "building that needs power does not work while the base has no spare power; Engineers build Power Generators "
     "quickly, so start the factory and let an Engineer add power. 3. Keep builders out of danger. If your team has "
     "only one Constructor and no factory, losing it loses the game. 4. Put mining stations on surveyed resources to "
     "raise income; surveyors find those resources near the base. 5. Builders use the raw materials they carry; refill "
-    "at the base when they carry too little. Buildings that touch your base join it and share its materials and "
-    "power.";
+    "at the base when they carry too little. 6. Once a factory is started, build a Habitat for workers and then "
+    "Eco-spheres, with Power Generators for them. Buildings that touch your base join it and share its materials, "
+    "power and workers.";
 
 static const char* const JevAi_FactoryInstructions =
     "You manage production for your team in M.A.X., a turn-based strategy game. Military units are commanded "
@@ -85,8 +89,9 @@ static const char* const JevAi_MilitaryInstructions =
     "You command one military or support unit of your team in M.A.X., a turn-based strategy game on a map of square "
     "cells. Construction is managed separately; your job is to find and destroy the enemy while keeping your base "
     "and your builders safe. Choose this unit's action now. Rules, most important first: 1. Attack enemies you can "
-    "damage, above all ones that can be destroyed this turn or cannot shoot back. 2. If enemies are near your base "
-    "or your builders, move between them or attack them. 3. Do not move where the danger is higher than this unit's "
+    "damage, above all ones that can be destroyed this turn or cannot shoot back. 2. If enemies are near your base, "
+    "your Eco-spheres or your builders, move between them or attack them; the enemy goes for the team with the most "
+    "points. 3. Do not move where the danger is higher than this unit's "
     "hits unless it can destroy the enemy there. 4. Otherwise explore to find the enemy: fast units go far, slow "
     "units stay within a few cells of the base until enemies are found.";
 
@@ -121,6 +126,15 @@ static bool JevAi_IsSiteFree(uint16_t team, ResourceID unit_type, Point site) {
     }
 
     return true;
+}
+
+/// Turns until the game ends, or -1 if it has no turn limit.
+static int32_t JevAi_GetTurnsLeft() {
+    if (ini_setting_victory_type != VICTORY_TYPE_DURATION) {
+        return -1;
+    }
+
+    return std::max(0, ini_setting_victory_limit - static_cast<int32_t>(GameManager_TurnCounter));
 }
 
 static bool JevAi_IsFactory(ResourceID unit_type) {
@@ -197,7 +211,7 @@ static std::string JevAi_DescribePurpose(uint16_t team, ResourceID unit_type) {
         case RESEARCH:
             return "research centre, slowly upgrades units, needs workers;";
         case GREENHSE:
-            return "eco-sphere, scores points, needs workers;";
+            return "Eco-sphere, scores 1 point every turn while it works, points decide the game;";
         case DEPOT:
             return "repairs and reloads land units next to it;";
         case HANGAR:
@@ -619,6 +633,22 @@ void JevAi::BalanceEconomy() {
                 ++generators_on;
             }
         }
+
+        // an Eco-sphere only scores while it works
+        int32_t power_left = complex->power;
+        int32_t workers_left = complex->workers;
+
+        for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+             ++it) {
+            if ((*it).GetComplex() == complex && (*it).GetUnitType() == GREENHSE && (*it).hits > 0 &&
+                (*it).GetOrder() == ORDER_POWER_OFF && power_left >= Cargo_GetPowerConsumptionRate(GREENHSE) &&
+                workers_left >= Cargo_GetLifeConsumptionRate(GREENHSE)) {
+                UnitsManager_SetNewOrder(it->Get(), ORDER_POWER_ON, ORDER_STATE_INIT);
+
+                power_left -= Cargo_GetPowerConsumptionRate(GREENHSE);
+                workers_left -= Cargo_GetLifeConsumptionRate(GREENHSE);
+            }
+        }
     }
 }
 
@@ -749,6 +779,10 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
     int32_t power_needed = 0;
     int32_t power_generated = 0;
     int32_t generators = 0;
+    // the same for workers: Eco-spheres need them, Habitats give them
+    int32_t workers_needed = 0;
+    int32_t workers_given = 0;
+    int32_t factories = 0;
     Cargo fuel_mining;
     Cargo fuel_mining_capacity;
 
@@ -777,15 +811,25 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             }
 
             if (power_unit != INVALID_ID) {
-                const int32_t rate = Cargo_GetPowerConsumptionRate(power_unit);
+                const int32_t power = Cargo_GetPowerConsumptionRate(power_unit);
+                const int32_t workers = Cargo_GetLifeConsumptionRate(power_unit);
 
-                if (rate > 0) {
-                    power_needed += rate;
+                if (power > 0) {
+                    power_needed += power;
 
                 } else {
-                    power_generated -= rate;
+                    power_generated -= power;
                     generators += power_unit == POWGEN;
                 }
+
+                if (workers > 0) {
+                    workers_needed += workers;
+
+                } else {
+                    workers_given -= workers;
+                }
+
+                factories += JevAi_IsFactory(power_unit);
             }
         }
     }
@@ -806,6 +850,13 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
         } else if (JevAi_IsFactory(unit_type)) {
             if ((unit_type != LIGHTPLT && unit_type != LANDPLT) || CountOwnUnits(unit_type) >= 2) {
+                continue;
+            }
+
+        } else if (unit_type == HABITAT || unit_type == GREENHSE) {
+            // points come after the first factory; an Eco-sphere needs a free worker, a Habitat gives three
+            if (factories == 0 || (unit_type == HABITAT && workers_given - workers_needed >= 1) ||
+                (unit_type == GREENHSE && workers_given - workers_needed < 1)) {
                 continue;
             }
 
@@ -859,6 +910,20 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
             } else if (unit_type == POWGEN) {
                 score = 20;
+
+            } else if (unit_type == GREENHSE) {
+                score = 30;
+                facts += ", " + std::to_string(workers_given - workers_needed) + " workers spare";
+
+                if (JevAi_GetTurnsLeft() > 0) {
+                    facts += ", " + std::to_string(JevAi_GetTurnsLeft()) + " turns left in the game";
+                }
+
+            } else if (unit_type == HABITAT) {
+                score = 25;
+                facts += ", gives " + std::to_string(-Cargo_GetLifeConsumptionRate(HABITAT)) +
+                         " workers, each Eco-sphere needs 1, you have " +
+                         std::to_string(std::max(0, workers_given - workers_needed)) + " spare";
             }
 
             if (unit_type == POWGEN) {
@@ -1171,6 +1236,21 @@ json JevAi::GetState(UnitInfo* unit) const {
         state["units_lost"] = m_units_lost;
 
         return state;
+    }
+
+    uint32_t best_enemy_points = 0;
+
+    for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
+        if (team != m_team && UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE) {
+            best_enemy_points = std::max(best_enemy_points, UnitsManager_TeamInfo[team].team_points);
+        }
+    }
+
+    state["score"] = {{"your_points", UnitsManager_TeamInfo[m_team].team_points},
+                      {"best_enemy_points", best_enemy_points}};
+
+    if (JevAi_GetTurnsLeft() >= 0) {
+        state["score"]["turns_left"] = JevAi_GetTurnsLeft();
     }
 
     state["team"] = {{"factories", factories},
