@@ -28,7 +28,6 @@
 #include "units_manager.hpp"
 
 static int32_t WinLoss_GetWorthOfAssets(uint16_t team, SmartList<UnitInfo>* units);
-static int32_t WinLoss_GetTotalWorthOfAssets(uint16_t team);
 
 int32_t WinLoss_GetWorthOfAssets(uint16_t team, SmartList<UnitInfo>* units) {
     int32_t sum_build_turns_value_of_team;

@@ -39,4 +39,9 @@ struct WinLoss_Status {
 
 WinLoss_Status WinLoss_EvaluateStatus(const int32_t turn_counter);
 
+/**
+ * \brief Returns the build cost of all units and buildings of a team, which ranks teams with equal points.
+ */
+int32_t WinLoss_GetTotalWorthOfAssets(uint16_t team);
+
 #endif /* WINLOSS_HPP */
