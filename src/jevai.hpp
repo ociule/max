@@ -33,10 +33,14 @@
 /**
  * \brief Computer player that asks the Jev decision model what each factory and each mobile land unit does.
  *
- * Each turn the controller first releases finished units from factories and building sites. Then it asks one question
- * per idle factory (which unit to produce, or nothing) and one or more per mobile land unit (where to move, what to
- * build for constructors and engineers, or stay). The game lists only legal options and attaches facts to each one;
- * Jev picks. Jev chooses what to build, the game chooses where. Strategy, starting units and saves come from NoneAi.
+ * Each turn the controller first releases finished units from factories and building sites. Construction and
+ * military decisions are separate questions, each with its own instructions and state:
+ * - production: one per idle factory, which unit to produce, or nothing;
+ * - construction: builders choose what to build, to refill, to get out of danger or to stay, and surveyors search
+ *   for resources where it is safe; these units act before the military ones;
+ * - military: every other mobile land unit chooses a target to attack, where to move, or to stay.
+ * The game lists only legal options and attaches facts to each one; Jev picks. Jev chooses what to build, the game
+ * chooses where. Strategy, starting units and saves come from NoneAi.
  */
 class JevAi final : public NoneAi {
     enum class State { SELECT, WAIT_FOR_ANSWER, WAIT_FOR_UNIT };
@@ -85,6 +89,8 @@ class JevAi final : public NoneAi {
     int32_t GetDistanceToUnexplored(Point point) const;
     int32_t GetDanger(UnitInfo* unit, Point point, int32_t* nearest_enemy) const;
     int32_t CountOwnUnits(ResourceID unit_type) const;
+    bool GetBasePosition(Point& position) const;
+    int32_t GetDistanceToOwnBuilder(Point point) const;
     bool TouchesBase(ResourceID unit_type, Point site) const;
     bool FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const;
     bool ReleaseFinishedUnit();
