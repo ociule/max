@@ -1722,9 +1722,12 @@ void JevAi::Apply(const std::string& answer) {
         case Action::ATTACK: {
             m_move_start = Point(m_unit->grid_x, m_unit->grid_y);
 
-            // same order as the classic AiAttack_EvaluateAttack and the human attack click
+            // same order as the classic AiAttack_EvaluateAttack and the human attack click (GameManager_SetUnitOrder):
+            // the unit moves toward the target cell until it is in range, then fires
             m_unit->SetEnemy(&*option->target);
             m_unit->path = nullptr;
+            m_unit->move_to_grid_x = option->target->grid_x;
+            m_unit->move_to_grid_y = option->target->grid_y;
 
             UnitsManager_SetNewOrder(&*m_unit, ORDER_MOVE_TO_ATTACK, ORDER_STATE_EXECUTING_ORDER);
 
