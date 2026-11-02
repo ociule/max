@@ -75,7 +75,14 @@ class JevAi final : public NoneAi {
         bool building;
     };
 
+    /// A Mining Station site away from the base and the connectors that join it to the base.
+    struct Link {
+        Point mine;
+        std::vector<Point> connectors;
+    };
+
     State m_state{State::SELECT};
+    std::vector<Link> m_links;
     std::vector<Sighting> m_sightings;
     std::vector<Site> m_sites;
     std::vector<SmartPointer<UnitInfo>> m_units;
@@ -118,6 +125,8 @@ class JevAi final : public NoneAi {
     bool LeavesExits(ResourceID unit_type, Point site) const;
     std::vector<Point> FindDefenseSites(UnitInfo* builder, ResourceID unit_type) const;
     std::vector<Point> FindMineSites() const;
+    bool FindConnectorPath(Point site, int32_t size, std::vector<Point>& path) const;
+    std::vector<Point> GetLinkCells(UnitInfo* builder) const;
     void RememberEnemies();
     bool GetApproach(std::vector<Point>& cells, Point& origin) const;
     nlohmann::ordered_json GetDefenseCoverage(ResourceID unit_type, Point site) const;

@@ -624,6 +624,11 @@ bool JevAi::IsFactoryExit(Point cell) const {
 bool JevAi::LeavesExits(ResourceID unit_type, Point site) const {
     // a finished unit leaves to a free cell next to its factory or building site; never take the last one
     const int32_t size = JevAi_GetSize(unit_type);
+
+    // land units drive over connectors and roads
+    if (unit_type == CNCT_4W || unit_type == ROAD) {
+        return true;
+    }
     const auto in_site = [site, size](Point cell) {
         return cell.x >= site.x && cell.x < site.x + size && cell.y >= site.y && cell.y < site.y + size;
     };
@@ -903,6 +908,91 @@ bool JevAi::GetApproach(std::vector<Point>& cells, Point& origin) const {
     return !cells.empty();
 }
 
+bool JevAi::FindConnectorPath(Point site, int32_t size, std::vector<Point>& path) const {
+    // the shortest line of connectors, cell to cell along edges, from a site to a building of the base
+    constexpr int32_t maximum_length = 6;
+    constexpr Point steps[4] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    const auto in_site = [site, size](Point cell) {
+        return cell.x >= site.x && cell.x < site.x + size && cell.y >= site.y && cell.y < site.y + size;
+    };
+    std::vector<std::pair<Point, int32_t>> queue;
+    std::vector<Point> seen;
+
+    path.clear();
+
+    for (int32_t x = site.x; x < site.x + size; ++x) {
+        for (int32_t y = site.y; y < site.y + size; ++y) {
+            for (const Point step : steps) {
+                const Point cell(x + step.x, y + step.y);
+
+                if (!in_site(cell) && JevAi_IsInsideMap(cell) &&
+                    std::find(seen.begin(), seen.end(), cell) == seen.end()) {
+                    seen.push_back(cell);
+                    queue.push_back({cell, -1});
+                }
+            }
+        }
+    }
+
+    for (size_t index = 0; index < queue.size(); ++index) {
+        const Point cell = queue[index].first;
+        int32_t length = 0;
+
+        for (int32_t parent = queue[index].second; parent >= 0; parent = queue[parent].second) {
+            ++length;
+        }
+
+        if (length >= maximum_length ||
+            !Access_IsAccessible(CNCT_4W, m_team, cell.x, cell.y, AccessModifier_EnemySameClassBlocks)) {
+            continue;
+        }
+
+        if (TouchesBase(CNCT_4W, cell)) {
+            for (int32_t at = static_cast<int32_t>(index); at >= 0; at = queue[at].second) {
+                path.push_back(queue[at].first);
+            }
+
+            return true;
+        }
+
+        for (const Point step : steps) {
+            const Point next(cell.x + step.x, cell.y + step.y);
+
+            if (!in_site(next) && JevAi_IsInsideMap(next) && std::find(seen.begin(), seen.end(), next) == seen.end()) {
+                seen.push_back(next);
+                queue.push_back({next, static_cast<int32_t>(index)});
+            }
+        }
+    }
+
+    return false;
+}
+
+std::vector<Point> JevAi::GetLinkCells(UnitInfo* builder) const {
+    // for each mine waiting for its connectors, the next one to lay, nearest to this builder
+    std::vector<Point> cells;
+
+    for (const auto& link : m_links) {
+        const Point* next = nullptr;
+        int32_t nearest = INT32_MAX;
+
+        for (const Point& cell : link.connectors) {
+            const int32_t distance = JevAi_GetDistance(cell, Point(builder->grid_x, builder->grid_y));
+
+            if (JevAi_IsSiteFree(m_team, CNCT_4W, cell) && distance < nearest) {
+                next = &cell;
+                nearest = distance;
+            }
+        }
+
+        if (next) {
+            cells.push_back(*next);
+        }
+    }
+
+    return cells;
+}
+
 std::vector<Point> JevAi::FindMineSites() const {
     // the richest surveyed sites around the base that join it: a mine away from the base has no power
     constexpr int32_t search_radius = 14;
@@ -928,12 +1018,18 @@ std::vector<Point> JevAi::FindMineSites() const {
 
             Survey_GetTotalResourcesInArea(x, y, 1, &raw, &gold, &fuel, false, m_team);
 
-            if (raw + fuel + gold == 0 || !JevAi_IsSiteFree(m_team, MININGST, site) || !TouchesBase(MININGST, site) ||
-                !LeavesExits(MININGST, site)) {
+            if (raw + fuel + gold == 0 || !JevAi_IsSiteFree(m_team, MININGST, site) || !LeavesExits(MININGST, site)) {
                 continue;
             }
 
-            candidates.push_back({raw + fuel + gold, site});
+            // a site away from the base needs connectors; each one costs a little
+            std::vector<Point> path;
+
+            if (!TouchesBase(MININGST, site) && !FindConnectorPath(site, 2, path)) {
+                continue;
+            }
+
+            candidates.push_back({raw + fuel + gold - static_cast<int32_t>(path.size()), site});
         }
     }
 
@@ -1498,6 +1594,11 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 continue;
             }
 
+        } else if (unit_type == CNCT_4W) {
+            if (m_links.empty()) {
+                continue;
+            }
+
         } else if (unit_type != MININGST && unit_type != GUNTURRT) {
             continue;
         }
@@ -1509,6 +1610,9 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
         } else if (unit_type == MININGST) {
             sites = FindMineSites();
+
+        } else if (unit_type == CNCT_4W) {
+            sites = GetLinkCells(builder);
 
         } else if (FindBuildSite(builder, unit_type, found_site)) {
             sites.push_back(found_site);
@@ -1569,10 +1673,22 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                     }
                 }
 
-                facts += ", joins your base, a station mines up to 16 per turn in all; your base mines raw " +
+                std::vector<Point> connectors;
+
+                if (TouchesBase(MININGST, site)) {
+                    facts += ", joins your base";
+                    data["joins_base"] = true;
+
+                } else if (FindConnectorPath(site, 2, connectors)) {
+                    facts += ", not joined to your base: it works once " + std::to_string(connectors.size()) +
+                             " connectors join it, which Engineers lay";
+                    data["joins_base"] = false;
+                    data["connectors_needed"] = static_cast<int32_t>(connectors.size());
+                }
+
+                facts += ", a station mines up to 16 per turn in all; your base mines raw " +
                          std::to_string(mining.raw) + " fuel " + std::to_string(mining.fuel) + " gold " +
                          std::to_string(mining.gold) + " per turn from " + std::to_string(mines) + " stations";
-                data["joins_base"] = true;
                 data["base_mining"] = {
                     {"raw", mining.raw}, {"fuel", mining.fuel}, {"gold", mining.gold}, {"stations", mines}};
                 score = (raw + fuel + gold) > 0 ? 40 + raw + fuel + gold : -10;
@@ -1640,6 +1756,23 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                         ->GetAttribute(ATTRIB_ATTACK) > 0) {
                     facts += ", a defense: " + JevAi_DescribeType(m_team, unit_type);
                     data["defense"] = JevAi_StatsData(m_team, unit_type);
+                }
+            }
+
+            if (unit_type == CNCT_4W) {
+                for (const auto& link : m_links) {
+                    if (std::find(link.connectors.begin(), link.connectors.end(), site) != link.connectors.end()) {
+                        const auto left =
+                            std::count_if(link.connectors.begin(), link.connectors.end(),
+                                          [this](Point cell) { return JevAi_IsSiteFree(m_team, CNCT_4W, cell); });
+
+                        facts += ", one of " + std::to_string(left) +
+                                 " connectors still needed to join the Mining Station at " +
+                                 JevAi_FormatPoint(link.mine) + " to your base; it works once joined";
+                        data["link"] = {{"mine_at", JevAi_PointData(link.mine)}, {"left", left}};
+                        score = 35;
+                        break;
+                    }
                 }
             }
 
@@ -2247,6 +2380,19 @@ void JevAi::Apply(const std::string& answer) {
         case Action::BUILD: {
             const int32_t size = JevAi_GetSize(option->unit_type);
 
+            // a mine away from the base: remember the connectors it needs
+            if (option->unit_type == MININGST && !TouchesBase(MININGST, option->destination)) {
+                Link link{option->destination, {}};
+
+                if (FindConnectorPath(option->destination, 2, link.connectors)) {
+                    m_links.push_back(link);
+
+                    SDL_Log("Jev %s: the Mining Station at %s needs %d connectors.", GetTeamName(),
+                            JevAi_FormatPoint(option->destination).c_str(),
+                            static_cast<int32_t>(link.connectors.size()));
+                }
+            }
+
             if (m_unit->grid_x >= option->destination.x && m_unit->grid_x < option->destination.x + size &&
                 m_unit->grid_y >= option->destination.y && m_unit->grid_y < option->destination.y + size) {
                 StartBuilding(&*m_unit, option->unit_type, option->destination);
@@ -2337,6 +2483,7 @@ void JevAi::BeginTurn() {
         m_lost.clear();
         m_sites.clear();
         m_sightings.clear();
+        m_links.clear();
     }
 
     m_last_turn = GameManager_TurnCounter;
@@ -2368,6 +2515,15 @@ void JevAi::BeginTurn() {
 
     BalanceEconomy();
     RememberEnemies();
+
+    // a link is done when all its connectors stand
+    m_links.erase(std::remove_if(m_links.begin(), m_links.end(),
+                                 [this](const Link& link) {
+                                     return std::none_of(
+                                         link.connectors.begin(), link.connectors.end(),
+                                         [this](Point cell) { return JevAi_IsSiteFree(m_team, CNCT_4W, cell); });
+                                 }),
+                  m_links.end());
 
     std::string buildings;
     Complex* complex = nullptr;
