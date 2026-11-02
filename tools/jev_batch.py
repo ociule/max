@@ -64,6 +64,12 @@ def summarize_game(name, jev_team):
         match = re.search(rf'Jev {jev_team}: turn (\d+), \d+ units, buildings:(.*)', line)
         if match and 'first_factory_turn' not in result and any(f'{name} (' in match.group(2) for name in FACTORIES):
             result['first_factory_turn'] = int(match.group(1))
+        if match:
+            # macro: Mining Stations standing, the most at once and when the second one stood
+            mines = match.group(2).count('Mining Station (')
+            result['mines_max'] = max(result.get('mines_max', 0), mines)
+            if mines >= 2 and 'second_mine_turn' not in result:
+                result['second_mine_turn'] = int(match.group(1))
 
         match = re.search(r'Command line: Game over on turn (\d+):(.*)', line)
         if match:
@@ -103,7 +109,8 @@ def table(results):
         return '-' if value is None else str(value)
 
     header = ('| game | status | turns | rank | points | enemy points | worth | enemy worth | units / buildings | '
-              'enemy units / buildings | first factory | first points | lost | enemy lost | questions | cost |')
+              'enemy units / buildings | first factory | first points | mines | second mine | lost | enemy lost | '
+              'questions | cost |')
     lines = [header, '|' + '---|' * (header.count('|') - 1)]
     for row in results:
         cost = row.get('input_tokens', 0) * 0.042 / 1e6
@@ -111,7 +118,8 @@ def table(results):
             row['name'], row.get('status', '?'), cell(row, 'turns_played'), cell(row, 'rank'), cell(row, 'points'), cell(row, 'enemy_points'),
             cell(row, 'worth'), cell(row, 'enemy_worth'), f"{cell(row, 'units')} / {cell(row, 'buildings')}",
             f"{cell(row, 'enemy_units')} / {cell(row, 'enemy_buildings')}", cell(row, 'first_factory_turn'),
-            cell(row, 'first_points_turn'), cell(row, 'lost'), cell(row, 'enemy_lost'), cell(row, 'questions'),
+            cell(row, 'first_points_turn'), cell(row, 'mines_max'), cell(row, 'second_mine_turn'), cell(row, 'lost'),
+            cell(row, 'enemy_lost'), cell(row, 'questions'),
             f'${cost:.3f}']) + ' |')
     return '\n'.join(lines)
 
