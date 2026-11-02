@@ -140,6 +140,7 @@ class JevAi final : public NoneAi {
     void AddProduceOptions(UnitInfo* factory);
     void AddAttackOptions(UnitInfo* unit);
     void AddRefillOptions(UnitInfo* builder);
+    void AddSurveyOptions(UnitInfo* surveyor);
     nlohmann::ordered_json GetState(UnitInfo* unit) const;
     bool Ask(UnitInfo* unit, const char* instructions);
     void Apply(const std::string& answer);
