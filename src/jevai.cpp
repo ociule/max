@@ -1097,25 +1097,15 @@ std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_ty
                             (*it2).GetBaseValues()->GetAttribute(ATTRIB_RANGE);
                 }
 
-                // only what no defense covers yet: more turrets over the same buildings take materials from the rest
-                score += covered ? 0 : weight * 10;
-            }
-
-            for (const Point cell : approach) {
-                bool covered = false;
-
-                for (auto it2 = UnitsManager_StationaryUnits.Begin(), it2_end = UnitsManager_StationaryUnits.End();
-                     it2 != it2_end && !covered; ++it2) {
-                    covered = (*it2).team == m_team && (*it2).hits > 0 && JevAi_IsDefense((*it2).GetUnitType()) &&
-                              JevAi_GetDistance(Point((*it2).grid_x, (*it2).grid_y), cell) <=
-                                  (*it2).GetBaseValues()->GetAttribute(ATTRIB_RANGE);
-                }
-
-                score += !covered && JevAi_GetDistance(site, cell) <= range ? 15 : 0;
+                score += covered ? weight * 5 : weight * 10;
             }
 
             if (score == 0) {
                 continue;
+            }
+
+            for (const Point cell : approach) {
+                score += JevAi_GetDistance(site, cell) <= range ? 15 : 0;
             }
 
             score -= JevAi_GetDistance(site, position) * 2;
@@ -1969,7 +1959,14 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
                               {"turns", turns},
                               {"cost", turns * rate},
                               {"stats", JevAi_StatsData(m_team, unit_type)},
-                              {"have", CountOwnUnits(unit_type)}}});
+                              {"have", CountOwnUnits(unit_type)},
+                              {"per_turn", rate},
+                              {"base_mines", mining.raw}}});
+
+        // the stock can be empty while the income pays for production: say both
+        m_options.back().facts += ", uses " + std::to_string(rate) +
+                                  " raw materials per turn from the base, which mines " + std::to_string(mining.raw) +
+                                  " per turn";
 
         // the faster rows: a factory draws more raw materials from the base each turn, which spends a surplus
         const Option normal = m_options.back();
@@ -2004,16 +2001,19 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
         }
     }
 
-    m_options.push_back(
-        {"nothing",
-         Action::STAY,
-         Point(),
-         INVALID_ID,
-         nullptr,
-         "produce nothing this turn; the base has " + std::to_string(materials.raw) + " of " +
-             std::to_string(capacity.raw) + " raw materials stored",
-         0,
-         {{"action", "produce_nothing"}, {"base_raw", materials.raw}, {"base_raw_capacity", capacity.raw}}});
+    m_options.push_back({"nothing",
+                         Action::STAY,
+                         Point(),
+                         INVALID_ID,
+                         nullptr,
+                         "produce nothing this turn; the base has " + std::to_string(materials.raw) + " of " +
+                             std::to_string(capacity.raw) + " raw materials stored and mines " +
+                             std::to_string(mining.raw) + " per turn",
+                         0,
+                         {{"action", "produce_nothing"},
+                          {"base_raw", materials.raw},
+                          {"base_raw_capacity", capacity.raw},
+                          {"base_mines", mining.raw}}});
 }
 
 void JevAi::AddSurveyOptions(UnitInfo* surveyor) {

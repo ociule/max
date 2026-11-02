@@ -1,0 +1,541 @@
+{
+ "id": "factory-empty-stock-income",
+ "source": "runs/b16-spend-w6-s13/questions.jsonl#163",
+ "why": "the stock is empty but the base mines 10 raw per turn and the Heavy Vehicle Plant uses 3: production is affordable, idling wastes the factory",
+ "label": "agent",
+ "holdout": false,
+ "expect": {
+  "acceptable": [
+   {
+    "action": "produce"
+   }
+  ],
+  "forbidden": [
+   {
+    "action": "produce_nothing"
+   }
+  ]
+ },
+ "request": {
+  "id": 164,
+  "team": "red",
+  "state": {
+   "game": "M.A.X., turn-based strategy",
+   "turn": 26,
+   "you": {
+    "type": "Heavy Vehicle Plant",
+    "position": [
+     16,
+     88
+    ],
+    "hits": 56,
+    "max_hits": 56
+   },
+   "score": {
+    "your_points": 0,
+    "best_enemy_points": 0,
+    "turns_left": 74
+   },
+   "team": {
+    "factories": 1,
+    "constructors": 2,
+    "engineers": 2,
+    "combat_units": 1
+   },
+   "mining_per_turn": {
+    "raw": 10,
+    "fuel": 6,
+    "gold": 0
+   },
+   "base": {
+    "raw": 0,
+    "raw_capacity": 125,
+    "fuel": 0,
+    "fuel_capacity": 0,
+    "gold": 0,
+    "power_left": 0,
+    "workers_left": 0,
+    "storage_full_turns": 1,
+    "raw_lost_so_far": 10
+   },
+   "production": {
+    "raw_per_turn": 3,
+    "power_needed": 1,
+    "workers_needed": 0,
+    "can_run_next_turn_without_reallocating": true,
+    "balance_after_generator_switching": {
+     "raw": 7,
+     "fuel": 2,
+     "gold": 0,
+     "power": 0,
+     "workers": 0
+    }
+   },
+   "buildings": {
+    "Storage Unit": 2,
+    "Power Generator": 3,
+    "Gun Turret": 1,
+    "Heavy Vehicle Plant": 1,
+    "Mining Station": 1
+   },
+   "units": {
+    "Constructor": 2,
+    "Missile Crawler": 1,
+    "Scanner": 1,
+    "Engineer": 2,
+    "Surveyor": 1
+   },
+   "explored_cells": 1606,
+   "map_cells": 12544,
+   "enemies_seen": 0,
+   "units_lost": 0
+  },
+  "questions": {
+   "production": {
+    "type": "choice",
+    "instructions": "",
+    "criteria": {}
+   }
+  },
+  "options": {
+   "p0": {
+    "action": "produce",
+    "type": "Constructor",
+    "purpose": {
+     "type": "Constructor",
+     "key": "CONSTRCT"
+    },
+    "turns": 8,
+    "cost": 24,
+    "stats": {
+     "hits": 24,
+     "armor": 6,
+     "speed": 6
+    },
+    "have": 2,
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p1": {
+    "action": "produce",
+    "type": "Constructor",
+    "purpose": {
+     "type": "Constructor",
+     "key": "CONSTRCT"
+    },
+    "turns": 8,
+    "cost": 24,
+    "stats": {
+     "hits": 24,
+     "armor": 6,
+     "speed": 6
+    },
+    "have": 2,
+    "speed": {
+     "rate": 2,
+     "turns": 4,
+     "cost": 48,
+     "per_turn": 12,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p2": {
+    "action": "produce",
+    "type": "Constructor",
+    "purpose": {
+     "type": "Constructor",
+     "key": "CONSTRCT"
+    },
+    "turns": 8,
+    "cost": 24,
+    "stats": {
+     "hits": 24,
+     "armor": 6,
+     "speed": 6
+    },
+    "have": 2,
+    "speed": {
+     "rate": 4,
+     "turns": 2,
+     "cost": 72,
+     "per_turn": 36,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p3": {
+    "action": "produce",
+    "type": "Scanner",
+    "purpose": {
+     "type": "Scanner",
+     "key": "SCANNER"
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "hits": 24,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 1,
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p4": {
+    "action": "produce",
+    "type": "Scanner",
+    "purpose": {
+     "type": "Scanner",
+     "key": "SCANNER"
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "hits": 24,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 1,
+    "speed": {
+     "rate": 2,
+     "turns": 2,
+     "cost": 24,
+     "per_turn": 12,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p5": {
+    "action": "produce",
+    "type": "Scanner",
+    "purpose": {
+     "type": "Scanner",
+     "key": "SCANNER"
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "hits": 24,
+     "armor": 4,
+     "speed": 7
+    },
+    "have": 1,
+    "speed": {
+     "rate": 4,
+     "turns": 1,
+     "cost": 36,
+     "per_turn": 36,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p6": {
+    "action": "produce",
+    "type": "Tank",
+    "purpose": {
+     "type": "Tank",
+     "key": "TANK"
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "attack": 16,
+     "range": 4,
+     "hits": 24,
+     "armor": 10,
+     "speed": 6
+    },
+    "have": 0,
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p7": {
+    "action": "produce",
+    "type": "Tank",
+    "purpose": {
+     "type": "Tank",
+     "key": "TANK"
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "attack": 16,
+     "range": 4,
+     "hits": 24,
+     "armor": 10,
+     "speed": 6
+    },
+    "have": 0,
+    "speed": {
+     "rate": 2,
+     "turns": 2,
+     "cost": 24,
+     "per_turn": 12,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p8": {
+    "action": "produce",
+    "type": "Tank",
+    "purpose": {
+     "type": "Tank",
+     "key": "TANK"
+    },
+    "turns": 4,
+    "cost": 12,
+    "stats": {
+     "attack": 16,
+     "range": 4,
+     "hits": 24,
+     "armor": 10,
+     "speed": 6
+    },
+    "have": 0,
+    "speed": {
+     "rate": 4,
+     "turns": 1,
+     "cost": 36,
+     "per_turn": 36,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p9": {
+    "action": "produce",
+    "type": "Assault Gun",
+    "purpose": {
+     "type": "Assault Gun",
+     "key": "ARTILLRY"
+    },
+    "turns": 8,
+    "cost": 24,
+    "stats": {
+     "attack": 18,
+     "range": 6,
+     "hits": 24,
+     "armor": 4,
+     "speed": 12
+    },
+    "have": 0,
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p10": {
+    "action": "produce",
+    "type": "Assault Gun",
+    "purpose": {
+     "type": "Assault Gun",
+     "key": "ARTILLRY"
+    },
+    "turns": 8,
+    "cost": 24,
+    "stats": {
+     "attack": 18,
+     "range": 6,
+     "hits": 24,
+     "armor": 4,
+     "speed": 12
+    },
+    "have": 0,
+    "speed": {
+     "rate": 2,
+     "turns": 4,
+     "cost": 48,
+     "per_turn": 12,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p11": {
+    "action": "produce",
+    "type": "Assault Gun",
+    "purpose": {
+     "type": "Assault Gun",
+     "key": "ARTILLRY"
+    },
+    "turns": 8,
+    "cost": 24,
+    "stats": {
+     "attack": 18,
+     "range": 6,
+     "hits": 24,
+     "armor": 4,
+     "speed": 12
+    },
+    "have": 0,
+    "speed": {
+     "rate": 4,
+     "turns": 2,
+     "cost": 72,
+     "per_turn": 36,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p12": {
+    "action": "produce",
+    "type": "Rocket Launcher",
+    "purpose": {
+     "type": "Rocket Launcher",
+     "key": "ROCKTLCH"
+    },
+    "turns": 8,
+    "cost": 24,
+    "stats": {
+     "attack": 15,
+     "range": 7,
+     "hits": 24,
+     "armor": 4,
+     "speed": 6
+    },
+    "have": 0,
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p13": {
+    "action": "produce",
+    "type": "Rocket Launcher",
+    "purpose": {
+     "type": "Rocket Launcher",
+     "key": "ROCKTLCH"
+    },
+    "turns": 8,
+    "cost": 24,
+    "stats": {
+     "attack": 15,
+     "range": 7,
+     "hits": 24,
+     "armor": 4,
+     "speed": 6
+    },
+    "have": 0,
+    "speed": {
+     "rate": 2,
+     "turns": 4,
+     "cost": 48,
+     "per_turn": 12,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p14": {
+    "action": "produce",
+    "type": "Rocket Launcher",
+    "purpose": {
+     "type": "Rocket Launcher",
+     "key": "ROCKTLCH"
+    },
+    "turns": 8,
+    "cost": 24,
+    "stats": {
+     "attack": 15,
+     "range": 7,
+     "hits": 24,
+     "armor": 4,
+     "speed": 6
+    },
+    "have": 0,
+    "speed": {
+     "rate": 4,
+     "turns": 2,
+     "cost": 72,
+     "per_turn": 36,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p15": {
+    "action": "produce",
+    "type": "Missile Crawler",
+    "purpose": {
+     "type": "Missile Crawler",
+     "key": "MISSLLCH"
+    },
+    "turns": 12,
+    "cost": 36,
+    "stats": {
+     "attack": 22,
+     "range": 10,
+     "hits": 24,
+     "armor": 4,
+     "speed": 6
+    },
+    "have": 1,
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p16": {
+    "action": "produce",
+    "type": "Missile Crawler",
+    "purpose": {
+     "type": "Missile Crawler",
+     "key": "MISSLLCH"
+    },
+    "turns": 12,
+    "cost": 36,
+    "stats": {
+     "attack": 22,
+     "range": 10,
+     "hits": 24,
+     "armor": 4,
+     "speed": 6
+    },
+    "have": 1,
+    "speed": {
+     "rate": 2,
+     "turns": 6,
+     "cost": 72,
+     "per_turn": 12,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "p17": {
+    "action": "produce",
+    "type": "Missile Crawler",
+    "purpose": {
+     "type": "Missile Crawler",
+     "key": "MISSLLCH"
+    },
+    "turns": 12,
+    "cost": 36,
+    "stats": {
+     "attack": 22,
+     "range": 10,
+     "hits": 24,
+     "armor": 4,
+     "speed": 6
+    },
+    "have": 1,
+    "speed": {
+     "rate": 4,
+     "turns": 3,
+     "cost": 108,
+     "per_turn": 36,
+     "base_mines": 10
+    },
+    "per_turn": 3,
+    "base_mines": 10
+   },
+   "nothing": {
+    "action": "produce_nothing",
+    "base_raw": 0,
+    "base_raw_capacity": 125,
+    "base_mines": 10
+   }
+  }
+ }
+}
