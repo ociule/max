@@ -229,6 +229,11 @@ def describe_coverage(c):
             ' to your base'
     if 'nearest_known_enemy' in c:
         text += f", nearest known enemy {c['nearest_known_enemy']} cells away"
+    if 'role' in c:
+        text += ', part of a wall on the outside of your base' if c['role'] == 'wall' else \
+            ', long range defense behind the wall'
+        text += ', on the side the enemy comes from' if c['enemy_side_known'] else \
+            ', on the side toward the map center: the enemy base is not found yet'
     return text
 
 
@@ -271,8 +276,21 @@ def render_survey_base(o):
         'only deposits that close can be mined and joined to the base'
 
 
+def render_search_enemy(o):
+    return f"search for the enemy base: head for unexplored land at {cell(o['to'])}, {o['distance']} cells away and " \
+        f"{o['from_base']} cells from your base; the enemy base is not found yet, it is likely far from yours"
+
+
+def render_picket(o):
+    return f"watch the way in: go to {cell(o['to'])}, {o['distance']} cells away, on the way from the enemy base " \
+        f"near {cell(o['enemy_at'])} to yours, and stay there on sentry as early warning and as a spotter for your " \
+        'long range defenses'
+
+
 RENDERERS = {
     'survey_base': render_survey_base,
+    'search_enemy': render_search_enemy,
+    'picket': render_picket,
     'move': render_move,
     'build': render_build,
     'produce': render_produce,

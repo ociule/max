@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 
 #include "access.hpp"
 #include "builder.hpp"
@@ -1053,62 +1054,128 @@ std::vector<Point> JevAi::FindMineSites() const {
     return sites;
 }
 
+bool JevAi::GetBaseCenter(Point& center, int32_t& extent) const {
+    // the middle of the buildings worth protecting, and how far they reach from it
+    int64_t sum_x = 0;
+    int64_t sum_y = 0;
+    int32_t count = 0;
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team == m_team && (*it).hits > 0 && JevAi_GetProtectionWeight((*it).GetUnitType()) > 0) {
+            sum_x += (*it).grid_x;
+            sum_y += (*it).grid_y;
+            ++count;
+        }
+    }
+
+    if (count == 0) {
+        return false;
+    }
+
+    center = Point(static_cast<int32_t>(sum_x / count), static_cast<int32_t>(sum_y / count));
+    extent = 1;
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team == m_team && (*it).hits > 0 && JevAi_GetProtectionWeight((*it).GetUnitType()) > 0) {
+            extent = std::max(extent, JevAi_GetDistance(center, Point((*it).grid_x, (*it).grid_y)) + 1);
+        }
+    }
+
+    return true;
+}
+
+bool JevAi::GetEnemyDirection(Point& origin) const {
+    // where the enemy comes from: its buildings the team has seen, else recent sightings, else the map center,
+    // since the enemy usually starts elsewhere on the map; true when it is known
+    std::vector<Point> approach;
+
+    if (GetApproach(approach, origin)) {
+        return true;
+    }
+
+    origin = Point(ResourceManager_MapSize.x / 2, ResourceManager_MapSize.y / 2);
+
+    return false;
+}
+
 std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_type) const {
-    // a few distinct legal sites, best first: what they protect, less what other defenses already protect
-    constexpr int32_t search_radius = 8;
+    // a few distinct legal sites by role, best first. Gun Turrets form a wall on the outside of the base, on the side
+    // the enemy comes from; long range defenses stand behind it, inside the base's edge, covering the way in
     constexpr int32_t maximum_sites = 3;
-    constexpr int32_t minimum_spacing = 3;
+    const bool is_wall = unit_type == GUNTURRT;
+    const int32_t minimum_spacing = is_wall ? 2 : 3;
     const int32_t range =
         UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], unit_type)->GetAttribute(ATTRIB_RANGE);
     const Point position(builder->grid_x, builder->grid_y);
     std::vector<std::pair<int64_t, Point>> candidates;
     std::vector<Point> approach;
     Point origin;
+    Point center;
+    int32_t extent;
+
+    if (!GetBaseCenter(center, extent)) {
+        return {};
+    }
 
     GetApproach(approach, origin);
+    GetEnemyDirection(origin);
 
-    for (int32_t x = position.x - search_radius; x <= position.x + search_radius; ++x) {
-        for (int32_t y = position.y - search_radius; y <= position.y + search_radius; ++y) {
+    const double toward_x = origin.x - center.x;
+    const double toward_y = origin.y - center.y;
+    const double toward_length = std::max(1.0, std::sqrt(toward_x * toward_x + toward_y * toward_y));
+
+    for (int32_t x = center.x - extent - 4; x <= center.x + extent + 4; ++x) {
+        for (int32_t y = center.y - extent - 4; y <= center.y + extent + 4; ++y) {
             const Point site(x, y);
+            const int32_t from_center = JevAi_GetDistance(site, center);
+
+            // the wall stands one to three cells outside the base, long range defenses inside its edge
+            if ((is_wall && (from_center < extent + 1 || from_center > extent + 3)) ||
+                (!is_wall && from_center > extent + 1)) {
+                continue;
+            }
 
             if (!JevAi_IsInsideMap(site) || !JevAi_IsSiteFree(m_team, unit_type, site) ||
                 !LeavesExits(unit_type, site)) {
                 continue;
             }
 
-            int64_t score = 0;
+            // on the side toward the enemy
+            const double facing =
+                ((x - center.x) * toward_x + (y - center.y) * toward_y) / (std::max(1, from_center) * toward_length);
+
+            if (facing < 0.3) {
+                continue;
+            }
+
+            int64_t score = static_cast<int64_t>(facing * 20);
 
             for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End();
                  it != it_end; ++it) {
-                const int32_t weight = JevAi_GetProtectionWeight((*it).GetUnitType());
-
-                if ((*it).team != m_team || (*it).hits == 0 || weight == 0 ||
-                    JevAi_GetDistance(site, Point((*it).grid_x, (*it).grid_y)) > range) {
+                if ((*it).team != m_team || (*it).hits == 0) {
                     continue;
                 }
 
-                bool covered = false;
+                const int32_t distance = JevAi_GetDistance(site, Point((*it).grid_x, (*it).grid_y));
+                const int32_t weight = JevAi_GetProtectionWeight((*it).GetUnitType());
 
-                for (auto it2 = UnitsManager_StationaryUnits.Begin(), it2_end = UnitsManager_StationaryUnits.End();
-                     it2 != it2_end && !covered; ++it2) {
-                    covered =
-                        (*it2).team == m_team && (*it2).hits > 0 && JevAi_IsDefense((*it2).GetUnitType()) &&
-                        JevAi_GetDistance(Point((*it2).grid_x, (*it2).grid_y), Point((*it).grid_x, (*it).grid_y)) <=
-                            (*it2).GetBaseValues()->GetAttribute(ATTRIB_RANGE);
+                // what it shields, and the defenses it fights next to
+                if (weight > 0 && distance <= range) {
+                    score += weight * 5;
                 }
 
-                score += covered ? weight * 5 : weight * 10;
-            }
-
-            if (score == 0) {
-                continue;
+                if (JevAi_IsDefense((*it).GetUnitType()) && distance <= 3) {
+                    score += 8;
+                }
             }
 
             for (const Point cell : approach) {
                 score += JevAi_GetDistance(site, cell) <= range ? 15 : 0;
             }
 
-            score -= JevAi_GetDistance(site, position) * 2;
+            score -= JevAi_GetDistance(site, position);
             candidates.push_back({score, site});
         }
     }
@@ -1118,7 +1185,7 @@ std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_ty
     std::vector<Point> sites;
 
     for (const auto& candidate : candidates) {
-        if (std::all_of(sites.begin(), sites.end(), [&candidate](Point chosen) {
+        if (std::all_of(sites.begin(), sites.end(), [&candidate, minimum_spacing](Point chosen) {
                 return JevAi_GetDistance(chosen, candidate.second) >= minimum_spacing;
             })) {
             sites.push_back(candidate.second);
@@ -1643,8 +1710,8 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 continue;
             }
 
-        } else if (unit_type == ARTYTRRT || unit_type == ANTIMSSL || unit_type == RADAR) {
-            // Gun Turrets are offered before the first enemy is seen; the others wait for it
+        } else if (unit_type == RADAR) {
+            // defenses are offered before the first enemy is seen; the Radar waits for it
             if (!enemies_seen) {
                 continue;
             }
@@ -1661,13 +1728,13 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 continue;
             }
 
-        } else if (unit_type != MININGST && unit_type != GUNTURRT) {
+        } else if (unit_type != MININGST && unit_type != GUNTURRT && unit_type != ANTIMSSL && unit_type != ARTYTRRT) {
             continue;
         }
 
         std::vector<Point> sites;
 
-        if (unit_type == GUNTURRT) {
+        if (unit_type == GUNTURRT || unit_type == ANTIMSSL || unit_type == ARTYTRRT) {
             sites = FindDefenseSites(builder, unit_type);
 
         } else if (unit_type == MININGST) {
@@ -1868,7 +1935,18 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                              " cells away";
                 }
 
+                // the site's role, and whether the enemy's side is known or only guessed
+                Point origin;
+                const bool direction_known = GetEnemyDirection(origin);
+                const std::string role = unit_type == GUNTURRT ? "wall" : "behind the wall";
+
+                facts += unit_type == GUNTURRT ? ", part of a wall on the outside of your base"
+                                               : ", long range defense behind the wall";
+                facts += direction_known ? ", on the side the enemy comes from"
+                                         : ", on the side toward the map center: the enemy base is not found yet";
                 data["coverage"] = coverage;
+                data["coverage"]["role"] = role;
+                data["coverage"]["enemy_side_known"] = direction_known;
                 score += 10;
             }
 
@@ -2014,6 +2092,114 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
                           {"base_raw", materials.raw},
                           {"base_raw_capacity", capacity.raw},
                           {"base_mines", mining.raw}}});
+}
+
+void JevAi::AddScoutOptions(UnitInfo* scout) {
+    // Scouts find the enemy base, then watch the way in from a post on it
+    const Point position(scout->grid_x, scout->grid_y);
+    Point base;
+
+    if (scout->speed == 0 || !GetBasePosition(base)) {
+        return;
+    }
+
+    const bool base_found =
+        std::any_of(m_sightings.begin(), m_sightings.end(), [](const Sighting& sighting) { return sighting.building; });
+
+    if (!base_found) {
+        // the most promising unexplored land: far from the own base, not too far from the scout
+        Point best;
+        int32_t best_score = INT32_MIN;
+
+        for (int32_t x = 0; x < ResourceManager_MapSize.x; x += 3) {
+            for (int32_t y = 0; y < ResourceManager_MapSize.y; y += 3) {
+                const Point cell(x, y);
+
+                if (IsExplored(cell) || Access_GetSurfaceType(x, y) != SURFACE_TYPE_LAND) {
+                    continue;
+                }
+
+                const int32_t score = JevAi_GetDistance(base, cell) - JevAi_GetDistance(position, cell) / 2;
+
+                if (score > best_score) {
+                    best = cell;
+                    best_score = score;
+                }
+            }
+        }
+
+        if (best_score == INT32_MIN) {
+            return;
+        }
+
+        const int32_t distance = JevAi_GetDistance(position, best);
+
+        m_options.push_back({"e" + std::to_string(m_options.size()),
+                             Action::MOVE,
+                             best,
+                             INVALID_ID,
+                             nullptr,
+                             "search for the enemy base: head for unexplored land at " + JevAi_FormatPoint(best) +
+                                 ", " + std::to_string(distance) + " cells away and " +
+                                 std::to_string(JevAi_GetDistance(base, best)) +
+                                 " cells from your base; the enemy base is not found yet, it is likely far from yours",
+                             25,
+                             {{"action", "search_enemy"},
+                              {"to", JevAi_PointData(best)},
+                              {"distance", distance},
+                              {"from_base", JevAi_GetDistance(base, best)}}});
+        return;
+    }
+
+    // a post on the way in, about twelve cells out, that no other picket holds
+    constexpr int32_t post_distance = 12;
+    Point origin;
+
+    GetEnemyDirection(origin);
+
+    const int32_t length = std::max(1, JevAi_GetDistance(base, origin));
+    const int32_t step = std::min(post_distance, length - 1);
+    const Point target(base.x + (origin.x - base.x) * step / length, base.y + (origin.y - base.y) * step / length);
+    Point post;
+    int32_t nearest = INT32_MAX;
+
+    for (int32_t x = target.x - 2; x <= target.x + 2; ++x) {
+        for (int32_t y = target.y - 2; y <= target.y + 2; ++y) {
+            if (JevAi_IsInsideMap(Point(x, y)) &&
+                Access_IsAccessible(scout->GetUnitType(), m_team, x, y, AccessModifier_SameClassBlocks) &&
+                JevAi_GetDistance(target, Point(x, y)) < nearest) {
+                post = Point(x, y);
+                nearest = JevAi_GetDistance(target, post);
+            }
+        }
+    }
+
+    if (nearest == INT32_MAX) {
+        return;
+    }
+
+    for (const auto& picket : m_pickets) {
+        if (picket.first != scout->GetId() && JevAi_GetDistance(picket.second, post) < 4) {
+            return;
+        }
+    }
+
+    const int32_t distance = JevAi_GetDistance(position, post);
+
+    m_options.push_back({"w" + std::to_string(m_options.size()),
+                         Action::MOVE,
+                         post,
+                         INVALID_ID,
+                         nullptr,
+                         "watch the way in: go to " + JevAi_FormatPoint(post) + ", " + std::to_string(distance) +
+                             " cells away, on the way from the enemy base near " + JevAi_FormatPoint(origin) +
+                             " to yours, and stay there on sentry as early warning and as a spotter for your long "
+                             "range defenses",
+                         20,
+                         {{"action", "picket"},
+                          {"to", JevAi_PointData(post)},
+                          {"distance", distance},
+                          {"enemy_at", JevAi_PointData(origin)}}});
 }
 
 void JevAi::AddSurveyOptions(UnitInfo* surveyor) {
@@ -2680,6 +2866,15 @@ void JevAi::Apply(const std::string& answer) {
         } break;
 
         case Action::MOVE: {
+            if (option->data.value("action", "") == "picket") {
+                const uint16_t id = m_unit->GetId();
+
+                m_pickets.erase(std::remove_if(m_pickets.begin(), m_pickets.end(),
+                                               [id](const auto& picket) { return picket.first == id; }),
+                                m_pickets.end());
+                m_pickets.push_back({id, option->destination});
+            }
+
             m_move_start = Point(m_unit->grid_x, m_unit->grid_y);
             m_unit->move_to_grid_x = option->destination.x;
             m_unit->move_to_grid_y = option->destination.y;
@@ -2715,6 +2910,7 @@ void JevAi::BeginTurn() {
         m_sites.clear();
         m_sightings.clear();
         m_links.clear();
+        m_pickets.clear();
         m_raw_full_turns = 0;
         m_raw_lost = 0;
     }
@@ -2769,6 +2965,27 @@ void JevAi::BeginTurn() {
             break;
         }
     }
+
+    // pickets that reached their post watch it on sentry; lost pickets are forgotten
+    m_pickets.erase(
+        std::remove_if(m_pickets.begin(), m_pickets.end(),
+                       [this](const auto& picket) {
+                           for (auto it = UnitsManager_MobileLandSeaUnits.Begin(),
+                                     it_end = UnitsManager_MobileLandSeaUnits.End();
+                                it != it_end; ++it) {
+                               if ((*it).GetId() == picket.first && (*it).team == m_team && (*it).hits > 0) {
+                                   if (JevAi_GetDistance(Point((*it).grid_x, (*it).grid_y), picket.second) <= 1 &&
+                                       (*it).GetOrder() == ORDER_AWAIT) {
+                                       UnitsManager_SetNewOrder(it->Get(), ORDER_SENTRY, ORDER_STATE_INIT);
+                                   }
+
+                                   return false;
+                               }
+                           }
+
+                           return true;
+                       }),
+        m_pickets.end());
 
     // a link is done when all its connectors stand
     m_links.erase(std::remove_if(m_links.begin(), m_links.end(),
@@ -2980,7 +3197,14 @@ bool JevAi::CheckEndTurn() {
                     while (!m_units.empty()) {
                         auto& unit = m_units.front();
 
-                        if (unit->hits > 0 && Task_IsReadyToTakeOrders(&*unit) &&
+                        // a picket on sentry is asked again only when an enemy comes in sight
+                        int32_t nearest_enemy = -1;
+                        const bool quiet_sentry =
+                            unit->GetOrder() == ORDER_SENTRY &&
+                            GetDanger(&*unit, Point(unit->grid_x, unit->grid_y), &nearest_enemy) == 0 &&
+                            (nearest_enemy < 0 || nearest_enemy > unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN));
+
+                        if (unit->hits > 0 && Task_IsReadyToTakeOrders(&*unit) && !quiet_sentry &&
                             (unit->speed > 0 || JevAi_IsBuilder(unit->GetUnitType()))) {
                             m_unit = unit;
                             break;
@@ -3028,6 +3252,10 @@ bool JevAi::CheckEndTurn() {
 
             if (m_unit->GetUnitType() == SURVEYOR) {
                 AddSurveyOptions(&*m_unit);
+            }
+
+            if (m_unit->GetUnitType() == SCOUT || m_unit->GetUnitType() == SCANNER) {
+                AddScoutOptions(&*m_unit);
             }
 
             m_options.push_back({"stay",
