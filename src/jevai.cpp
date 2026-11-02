@@ -1097,17 +1097,25 @@ std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_ty
                             (*it2).GetBaseValues()->GetAttribute(ATTRIB_RANGE);
                 }
 
-                score += covered ? weight * 5 : weight * 10;
+                // only what no defense covers yet: more turrets over the same buildings take materials from the rest
+                score += covered ? 0 : weight * 10;
+            }
+
+            for (const Point cell : approach) {
+                bool covered = false;
+
+                for (auto it2 = UnitsManager_StationaryUnits.Begin(), it2_end = UnitsManager_StationaryUnits.End();
+                     it2 != it2_end && !covered; ++it2) {
+                    covered = (*it2).team == m_team && (*it2).hits > 0 && JevAi_IsDefense((*it2).GetUnitType()) &&
+                              JevAi_GetDistance(Point((*it2).grid_x, (*it2).grid_y), cell) <=
+                                  (*it2).GetBaseValues()->GetAttribute(ATTRIB_RANGE);
+                }
+
+                score += !covered && JevAi_GetDistance(site, cell) <= range ? 15 : 0;
             }
 
             if (score == 0) {
                 continue;
-            }
-
-            const nlohmann::ordered_json coverage = GetDefenseCoverage(unit_type, site);
-
-            for (const Point cell : approach) {
-                score += JevAi_GetDistance(site, cell) <= range ? 15 : 0;
             }
 
             score -= JevAi_GetDistance(site, position) * 2;
@@ -1401,6 +1409,16 @@ UnitInfo* JevAi::FindIdleFactory() const {
 
         if (unit.team == m_team && unit.hits > 0 && JevAi_IsFactory(unit.GetUnitType()) && is_settled &&
             std::find(m_handled.begin(), m_handled.end(), SmartPointer<UnitInfo>(&unit)) == m_handled.end()) {
+            // a factory halted for lack of power or materials is asked again only when it could run: asking it every
+            // turn only repeats the same choice (b13 world 3: "produce a Tank" 64 times)
+            if ((order == ORDER_HALT_BUILDING || order == ORDER_HALT_BUILDING_2) && unit.GetComplex()) {
+                const Cargo balance = ProductionManager_PreviewProduction(m_team, unit.GetComplex(), &unit);
+
+                if (balance.raw < 0 || balance.fuel < 0 || balance.gold < 0 || balance.power < 0 || balance.life < 0) {
+                    continue;
+                }
+            }
+
             return &unit;
         }
     }
