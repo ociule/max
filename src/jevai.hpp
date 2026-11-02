@@ -87,6 +87,8 @@ class JevAi final : public NoneAi {
 
     State m_state{State::SELECT};
     std::vector<Link> m_links;
+    /// Scouts watching the way in: unit (UnitInfo::GetId()) and its post.
+    std::vector<std::pair<uint16_t, Point>> m_pickets;
     std::vector<Sighting> m_sightings;
     std::vector<Site> m_sites;
     std::vector<SmartPointer<UnitInfo>> m_units;
@@ -135,6 +137,9 @@ class JevAi final : public NoneAi {
     bool FindConnectorPath(Point site, int32_t size, std::vector<Point>& path) const;
     std::vector<Point> GetLinkCells(UnitInfo* builder) const;
     void RememberEnemies();
+    bool GetBaseCenter(Point& center, int32_t& extent) const;
+    bool GetEnemyDirection(Point& origin) const;
+    void AddScoutOptions(UnitInfo* scout);
     bool GetApproach(std::vector<Point>& cells, Point& origin) const;
     nlohmann::ordered_json GetDefenseCoverage(ResourceID unit_type, Point site) const;
     bool IsFactoryExit(Point cell) const;
