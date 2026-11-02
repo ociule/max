@@ -151,7 +151,11 @@ def render_move(o):
         text += f", nearest known enemy {o['nearest_enemy']} cells away"
     if 'resources' in o:
         r = o['resources']
-        text += f", resources there raw {r['raw']} fuel {r['fuel']} gold {r['gold']}"
+        if 'unsurveyed_cells' in o:
+            text += f", surveyed resources there raw {r['raw']} fuel {r['fuel']} gold {r['gold']}, " \
+                f"{o['unsurveyed_cells']} of 9 cells not surveyed"
+        else:
+            text += f", resources there raw {r['raw']} fuel {r['fuel']} gold {r['gold']}"
     return text
 
 
@@ -163,6 +167,10 @@ def render_build(o):
     if 'resources' in o:
         r = o['resources']
         text += f", surveyed resources under it raw {r['raw']} fuel {r['fuel']} gold {r['gold']}"
+        if 'base_mining' in o:
+            m = o['base_mining']
+            text += f", joins your base, a station mines up to 16 per turn in all; your base mines raw {m['raw']} " \
+                f"fuel {m['fuel']} gold {m['gold']} per turn from {m['stations']} stations"
     else:
         text += ', joins your base' if o.get('joins_base') else ', not connected to your base'
         if 'gives_workers' in o:
