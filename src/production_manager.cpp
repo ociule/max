@@ -62,6 +62,8 @@ class ProductionManager {
     static void ComposeResourceMessage(char* buffer, const size_t buffer_size, int32_t new_value, int32_t old_value,
                                        const char* format1, const char* format2);
 
+    friend Cargo ProductionManager_PreviewProduction(const uint16_t team, Complex* const complex,
+                                                    UnitInfo* const unit);
     friend bool ProductionManager_UpdateIndustryOrders(const uint16_t team, Complex* const complex);
     friend void ProductionManager_OptimizeProduction(const uint16_t team, Complex* const complex, UnitInfo* const unit,
                                                      bool show_messages);
@@ -825,6 +827,19 @@ bool ProductionManager_UpdateIndustryOrders(const uint16_t team, Complex* const 
     manager.OptimizePowerConsumption();
 
     return is_found;
+}
+
+Cargo ProductionManager_PreviewProduction(const uint16_t team, Complex* const complex, UnitInfo* const unit) {
+    ProductionManager manager(team, complex);
+    manager.total -= Cargo_GetNetProduction(unit, true);
+    manager.total.raw -= Cargo_GetRawConsumptionRate(unit->GetUnitType(), 1);
+    manager.total.fuel -= Cargo_GetFuelConsumptionRate(unit->GetUnitType());
+    manager.total.gold -= Cargo_GetGoldConsumptionRate(unit->GetUnitType());
+    manager.total.power -= Cargo_GetPowerConsumptionRate(unit->GetUnitType());
+    manager.total.life -= Cargo_GetLifeConsumptionRate(unit->GetUnitType());
+    manager.OptimizePowerProduction();
+
+    return manager.total;
 }
 
 void ProductionManager_OptimizeProduction(const uint16_t team, Complex* const complex, UnitInfo* const unit,

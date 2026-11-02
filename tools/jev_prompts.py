@@ -7,8 +7,9 @@ improvement loop changes the wording here, then tests it with tools/jev_suite.py
 
     python3 tools/jev_prompts.py --check runs/NAME/questions.jsonl
 
-renders every logged option and compares it with the text the game wrote for it (parity with the controller's own
-wording, src/jevai.cpp).
+renders every logged option and compares it with the text the game wrote for it. The two were the same when the
+wording moved here (2026-11-01); since then the templates are what Jev reads and may differ. The game keeps its own
+texts for its log, which tools/jev_review.py reads.
 """
 
 import argparse
@@ -39,9 +40,9 @@ INSTRUCTIONS = {
         'commanded separately; you choose what this factory produces next, or nothing. A unit takes the given'
         ' number of turns and uses raw materials from your base every turn while it is being built. Rules, '
         'most important first: 1. If your team has only one Constructor, produce another one first when this '
-        'factory can, so that losing a builder does not lose the game. 2. Then produce combat units that '
-        'fight ground units, a mix of strong and long range ones. 3. Produce nothing only when the base '
-        'cannot afford anything useful.'),
+        'factory can, so that losing a builder does not lose the game. 2. Then produce combat units that fight'
+        ' ground units, a mix of strong and long range ones. 3. Produce nothing only when the base cannot '
+        'afford anything useful.'),
     'military': (
         'You command one military or support unit of your team in M.A.X., a turn-based strategy game on a map'
         ' of square cells. Construction is managed separately; your job is to find and destroy the enemy '
@@ -100,6 +101,14 @@ ROLES = {
     'COMMANDO': 'infiltrator, steals or disables enemy units;',
 }
 
+# Types the game sends without an engine name key, by name.
+ROLES_BY_NAME = {
+    'Personnel Carrier': 'armored transport for infantry;',
+}
+
+
+def article(name):
+    return 'an' if name[:1] in 'AEIOU' else 'a'
 
 
 def cell(point):
@@ -109,7 +118,7 @@ def cell(point):
 def describe_purpose(purpose):
     factory = purpose.get('factory')
     if factory is None:
-        return ROLES.get(purpose.get('key', ''), '')
+        return ROLES.get(purpose.get('key', '')) or ROLES_BY_NAME.get(purpose.get('type', ''), '')
     text = 'factory; '
     text += ('combat units against ground: ' + ', '.join(factory['combat']) if factory['combat']
              else 'it makes no combat units that fight ground units')
@@ -147,7 +156,7 @@ def render_move(o):
 
 
 def render_build(o):
-    text = f"build a {o['type']} at {cell(o['at'])}: {describe_purpose(o['purpose'])} {o['turns']} turns, " \
+    text = f"build {article(o['type'])} {o['type']} at {cell(o['at'])}: {describe_purpose(o['purpose'])} {o['turns']} turns, " \
         f"{o['cost']} raw materials, you carry {o['carried']}, you have {o['have']} already"
     if o.get('walks_there'):
         text += ', the builder walks there first'
@@ -179,7 +188,7 @@ def render_build(o):
 
 
 def render_produce(o):
-    return f"produce a {o['type']}: {describe_purpose(o['purpose'])} {o['turns']} turns, {o['cost']} raw materials, " \
+    return f"produce {article(o['type'])} {o['type']}: {describe_purpose(o['purpose'])} {o['turns']} turns, {o['cost']} raw materials, " \
         f"{describe_stats(o['stats'])}, you have {o['have']}"
 
 
@@ -194,13 +203,19 @@ def render_attack(o):
     return text
 
 
+def render_produce_nothing(o):
+    text = f"produce nothing this turn; the base has {o['base_raw']} of {o['base_raw_capacity']} raw materials stored"
+    if o['base_raw_capacity'] and o['base_raw'] >= o['base_raw_capacity']:
+        text += ', storage is full, so the raw materials mined while nothing is built are lost'
+    return text
+
+
 RENDERERS = {
     'move': render_move,
     'build': render_build,
     'produce': render_produce,
     'attack': render_attack,
-    'produce_nothing': lambda o: f"produce nothing this turn; the base has {o['base_raw']} of "
-                                 f"{o['base_raw_capacity']} raw materials stored",
+    'produce_nothing': render_produce_nothing,
     'refill': lambda o: f"take {o['amount']} raw materials from the {o['from']} next to you, you carry "
                         f"{o['carried']} of {o['capacity']}, the base stores {o['base_raw']}",
     'go_refill': lambda o: f"go next to the {o['to_building']} at {cell(o['to'])}, {o['distance']} cells away, to "

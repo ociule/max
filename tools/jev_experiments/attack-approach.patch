@@ -1,0 +1,16 @@
+diff --git a/src/jevai.cpp b/src/jevai.cpp
+index 1510cb0..76a7395 100644
+--- a/src/jevai.cpp
++++ b/src/jevai.cpp
+@@ -1743,2 +1743,2 @@ void JevAi::Apply(const std::string& answer) {
+-            // same order as the classic AiAttack_EvaluateAttack and the human attack click (GameManager_SetUnitOrder):
+-            // the unit moves toward the target cell until it is in range, then fires
++            // Computer pursuit cancels executing attacks outside firing range. Request the approach path first;
++            // the path scheduler stops within weapon range, then enters the same firing state as classic attacks.
+@@ -1750 +1750,5 @@ void JevAi::Apply(const std::string& answer) {
+-            UnitsManager_SetNewOrder(&*m_unit, ORDER_MOVE_TO_ATTACK, ORDER_STATE_EXECUTING_ORDER);
++            const bool in_range = Access_IsWithinAttackRange(
++                &*m_unit, option->target->grid_x, option->target->grid_y,
++                m_unit->GetBaseValues()->GetAttribute(ATTRIB_RANGE));
++            UnitsManager_SetNewOrder(&*m_unit, ORDER_MOVE_TO_ATTACK,
++                                     in_range ? ORDER_STATE_EXECUTING_ORDER : ORDER_STATE_MOVE_INIT);

@@ -1,0 +1,289 @@
+{
+ "id": "scanner-avoids-visible-fire",
+ "source": "runs/b3-baseline-w3-s7/questions.jsonl#21",
+ "why": "An unarmed Scanner on a safe cell can reveal 154 cells safely; it should avoid visible enemy fire rather than expose itself for slightly more exploration.",
+ "label": "agent",
+ "holdout": false,
+ "expect": {
+  "acceptable": [
+   {
+    "action": "move",
+    "danger<": 1
+   },
+   {
+    "action": "stay",
+    "danger": 0
+   }
+  ],
+  "forbidden": [
+   {
+    "action": "move",
+    "danger>": 0
+   }
+  ]
+ },
+ "request": {
+  "id": 22,
+  "team": "red",
+  "state": {
+   "game": "M.A.X., turn-based strategy",
+   "turn": 3,
+   "you": {
+    "type": "Scanner",
+    "position": [
+     59,
+     54
+    ],
+    "hits": 24,
+    "max_hits": 24,
+    "moves_left": 7,
+    "danger_here": 0,
+    "distance_to_base": 9,
+    "distance_to_nearest_builder": 8
+   },
+   "base_position": [
+    55,
+    63
+   ],
+   "army": {
+    "combat_units": 1,
+    "builders": 3
+   },
+   "nearest_enemies": [
+    {
+     "type": "Assault Gun",
+     "position": [
+      58,
+      47
+     ],
+     "hits": 24,
+     "distance": 7
+    },
+    {
+     "type": "Constructor",
+     "position": [
+      59,
+      40
+     ],
+     "hits": 24,
+     "distance": 14
+    }
+   ],
+   "enemies_seen": 2,
+   "explored_cells": 964,
+   "map_cells": 12544,
+   "units_lost": 0
+  },
+  "questions": {
+   "military": {
+    "type": "choice",
+    "instructions": "",
+    "criteria": {}
+   }
+  },
+  "options": {
+   "m0": {
+    "action": "move",
+    "direction": "N",
+    "distance": 3,
+    "to": [
+     59,
+     51
+    ],
+    "revealed": 82,
+    "danger": 24,
+    "from_base": 12,
+    "from_builder": 11,
+    "nearest_enemy": 4
+   },
+   "m1": {
+    "action": "move",
+    "direction": "N",
+    "distance": 7,
+    "to": [
+     59,
+     47
+    ],
+    "revealed": 191,
+    "danger": 24,
+    "from_base": 16,
+    "from_builder": 15,
+    "nearest_enemy": 1
+   },
+   "m2": {
+    "action": "move",
+    "direction": "NE",
+    "distance": 2,
+    "to": [
+     61,
+     52
+    ],
+    "revealed": 72,
+    "danger": 24,
+    "from_base": 12,
+    "from_builder": 11,
+    "nearest_enemy": 5
+   },
+   "m3": {
+    "action": "move",
+    "direction": "NE",
+    "distance": 4,
+    "to": [
+     63,
+     50
+    ],
+    "revealed": 150,
+    "danger": 24,
+    "from_base": 15,
+    "from_builder": 13,
+    "nearest_enemy": 5
+   },
+   "m4": {
+    "action": "move",
+    "direction": "E",
+    "distance": 3,
+    "to": [
+     62,
+     54
+    ],
+    "revealed": 56,
+    "danger": 0,
+    "from_base": 11,
+    "from_builder": 10,
+    "nearest_enemy": 8
+   },
+   "m5": {
+    "action": "move",
+    "direction": "E",
+    "distance": 7,
+    "to": [
+     66,
+     54
+    ],
+    "revealed": 154,
+    "danger": 0,
+    "from_base": 14,
+    "from_builder": 12,
+    "nearest_enemy": 10
+   },
+   "m6": {
+    "action": "move",
+    "direction": "SE",
+    "distance": 2,
+    "to": [
+     61,
+     56
+    ],
+    "revealed": 20,
+    "danger": 0,
+    "from_base": 9,
+    "from_builder": 7,
+    "nearest_enemy": 9
+   },
+   "m7": {
+    "action": "move",
+    "direction": "SE",
+    "distance": 4,
+    "to": [
+     63,
+     58
+    ],
+    "revealed": 60,
+    "danger": 0,
+    "from_base": 9,
+    "from_builder": 8,
+    "nearest_enemy": 12
+   },
+   "m8": {
+    "action": "move",
+    "direction": "S",
+    "distance": 3,
+    "to": [
+     59,
+     57
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "from_base": 7,
+    "from_builder": 5,
+    "nearest_unexplored": 14,
+    "nearest_enemy": 10
+   },
+   "m9": {
+    "action": "move",
+    "direction": "S",
+    "distance": 7,
+    "to": [
+     59,
+     61
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "from_base": 4,
+    "from_builder": 3,
+    "nearest_unexplored": 14,
+    "nearest_enemy": 14
+   },
+   "m10": {
+    "action": "move",
+    "direction": "SW",
+    "distance": 2,
+    "to": [
+     57,
+     56
+    ],
+    "revealed": 2,
+    "danger": 0,
+    "from_base": 7,
+    "from_builder": 6,
+    "nearest_enemy": 9
+   },
+   "m11": {
+    "action": "move",
+    "direction": "W",
+    "distance": 3,
+    "to": [
+     56,
+     54
+    ],
+    "revealed": 31,
+    "danger": 0,
+    "from_base": 9,
+    "from_builder": 8,
+    "nearest_enemy": 7
+   },
+   "m12": {
+    "action": "move",
+    "direction": "NW",
+    "distance": 2,
+    "to": [
+     57,
+     52
+    ],
+    "revealed": 60,
+    "danger": 24,
+    "from_base": 11,
+    "from_builder": 10,
+    "nearest_enemy": 5
+   },
+   "m13": {
+    "action": "move",
+    "direction": "NW",
+    "distance": 4,
+    "to": [
+     55,
+     50
+    ],
+    "revealed": 129,
+    "danger": 24,
+    "from_base": 13,
+    "from_builder": 12,
+    "nearest_enemy": 4
+   },
+   "stay": {
+    "action": "stay",
+    "danger": 0
+   }
+  }
+ }
+}

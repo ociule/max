@@ -1,0 +1,52 @@
+# Jev prompt changelog
+
+One entry per prompt change tried with `tools/jev_suite.py` or a game batch: what changed, the scores before and
+after, kept or reverted. Newest first. The suite's margin varies by about ±0.03 between runs of the same prompt.
+
+## 2026-11-02: recovered loop, reliable baseline, supply facts and Scanner probe
+
+- Fixed parallel game-directory allocation with lifetime OS locks. New runs preserve prompt snapshots and hashes;
+  filtered suite runs now have separate comparison pointers. Added paid-request and input-token thresholds to new
+  bridges. Failed/incomplete/error-containing game batches now exit unsuccessfully.
+- Valid baseline `b3-baseline` (100 turns, worlds/seeds 0:42, 3:7, 6:13): three wins, points 88/132/120,
+  worth 316/582/716, losses 18/20/1. The old `b1` shared-directory runs are not valid controls. `b2-baseline` did
+  not start games because sandboxed local sockets were denied; its old runner incorrectly exited successfully.
+- Added read-only factory supply forecasts and selected the factory's own resource network. All 20 real-engine
+  checks passed, including no state changes. `b4-power-facts`: three wins, points 6/143/136, worth 136/558/652,
+  losses 23/12/2. Kept as factual controller corrections; these results do not establish a strength improvement.
+- Replayed the original Light Vehicle Plant question with production rebalancing, supply, role and shorter
+  instruction variants. None produced a reliable acceptable top pick. No speculative production wording was kept.
+  Exact requests/replies are in `runs/prototypes/power/` (synthetic supply probes are hypothetical, not historical
+  measurements of that saved factory).
+- Mined `scanner-avoids-visible-fire` from a real Scanner loss. Explicit unarmed-spotter instructions improved the
+  six-scenario suite from 12/18 acceptable, 3 forbidden to 15/18 acceptable, 0 forbidden, margin +0.17 to +0.27.
+  `b5-scanner-safety` then lost world 3/seed 7 on turn 10; reverted the wording because it did not meet the game gate.
+  Full batch: two wins, points 167/0/132, losses 18/2/0. This single stochastic batch does not establish that the
+  sentence caused the loss. Prompt snapshots preserve the tested candidate.
+- Added held-out `constructor-leaves-visible-fire`; tested once after the Scanner candidate was frozen: 1/3
+  acceptable, zero forbidden (the other two picks were refills, outside either label). Do not tune on this case.
+- Investigation of repeated attack choices found that executing computer attacks are cancelled outside firing
+  range. A real-engine regression reproduced it. Next candidate starts the approach path before entering the
+  firing scheduler. The candidate passed nine real-engine checks but `b6-attack-path` won only two of three:
+  points 100/0/141, losses 9/34/2. Held-out `b7-attack-heldout` won world 2/seed 29 (153 points) and lost
+  world 5/seed 101 (zero points). Did not promote: default attack behavior was restored; the candidate is saved
+  in `tools/jev_experiments/attack-approach.patch` and can be tested in a generated source copy with
+  `python3 test/run-production-preview-checks.py --suite jev-attack --attack-candidate`.
+- All 14 game logs were complete without logged API/template errors. Structured result/provenance summaries are
+  retained in `tools/jev_experiments/2026-11-02-results.json`; raw logs remain local under `runs/`. The tool's
+  input-token price estimate for those games is about $0.93, excluding small replay/suite probes.
+- No tactical strength gain is claimed. Next iteration should address defending the scoring base and the safety
+  of approaches before re-testing attack pursuit; rotate to fresh held-out cases rather than tuning on b7.
+
+## 2026-11-01: production wording, first loop iteration
+
+Suite before: 12/15 acceptable, 0 forbidden, margin +0.28. The Light Vehicle Plant chooses to produce nothing at turn
+11 (`light-plant-early-production`, 0.47 for nothing).
+
+- Kept, as corrections of fact, not tuning: "produce nothing" says when storage is full that mined raw materials are
+  lost; the Personnel Carrier has a role text; "an Engineer". Suite: 12/15, margin +0.28, no change.
+- Reverted: a production rule for factories that make no combat units and no Constructors (produce Engineers,
+  Surveyors, a Scout). Suite unchanged, nothing still chosen.
+- Found: without the base part of the state Jev picks an Engineer (0.33); with power_left 1, nothing drops to 0.35.
+  An idle factory may indeed have no power to start, so the honest fix is a fact on the production question saying
+  whether the factory can run and what producing switches off. Controller work, next.
