@@ -699,7 +699,7 @@ bool JevAi::ClearExit(UnitInfo* parent) {
 
         // each unit is moved aside once per turn: a move that failed would only fail again
         if (!blocker || blocker == parent || !Task_IsReadyToTakeOrders(blocker) || blocker->speed == 0 ||
-            std::find(m_turn_cleared_units.begin(), m_turn_cleared_units.end(), blocker->unit_id) !=
+            std::find(m_turn_cleared_units.begin(), m_turn_cleared_units.end(), blocker->GetId()) !=
                 m_turn_cleared_units.end()) {
             continue;
         }
@@ -737,7 +737,7 @@ bool JevAi::ClearExit(UnitInfo* parent) {
         UnitsManager_SetNewOrder(blocker, ORDER_MOVE, ORDER_STATE_INIT);
 
         ++m_turn_exit_clears;
-        m_turn_cleared_units.push_back(blocker->unit_id);
+        m_turn_cleared_units.push_back(blocker->GetId());
         m_wait_start = SDL_GetTicks();
         m_state = State::WAIT_FOR_UNIT;
 
@@ -2356,8 +2356,13 @@ void JevAi::WalkToSite(ResourceID unit_type, Point site) {
 }
 
 bool JevAi::ContinueToSite() {
+    // sites belong to builders; ids are the engine's unique ids, not the per type numbers in unit names
+    if (!JevAi_IsBuilder(m_unit->GetUnitType())) {
+        return false;
+    }
+
     auto entry = std::find_if(m_sites.begin(), m_sites.end(),
-                              [this](const Site& item) { return item.unit_id == m_unit->unit_id; });
+                              [this](const Site& item) { return item.unit_id == m_unit->GetId(); });
 
     if (entry == m_sites.end()) {
         return false;
@@ -2472,7 +2477,7 @@ void JevAi::Apply(const std::string& answer) {
                     JevAi_SiteWalkTurns;
 
                 m_sites.push_back(
-                    {m_unit->unit_id, option->unit_type, option->destination, GameManager_TurnCounter, walk_turns});
+                    {m_unit->GetId(), option->unit_type, option->destination, GameManager_TurnCounter, walk_turns});
 
                 WalkToSite(option->unit_type, option->destination);
             }
@@ -2713,7 +2718,7 @@ bool JevAi::CheckEndTurn() {
 
                 if (is_idle && m_unit->grid_x >= site.x && m_unit->grid_x < site.x + size && m_unit->grid_y >= site.y &&
                     m_unit->grid_y < site.y + size && JevAi_IsSiteFree(m_team, m_pending_build.unit_type, site)) {
-                    const uint16_t unit_id = m_unit->unit_id;
+                    const uint16_t unit_id = m_unit->GetId();
 
                     m_sites.erase(std::remove_if(m_sites.begin(), m_sites.end(),
                                                  [unit_id](const Site& item) { return item.unit_id == unit_id; }),
@@ -2890,8 +2895,8 @@ void JevAi::SetInfoMapPoint(Point point) {
 void JevAi::RemoveUnit(UnitInfo* unit) {
     // the removal notice can come more than once for the same unit
     if (unit->team == m_team && unit->hits == 0 && (unit->flags & MOBILE_LAND_UNIT) &&
-        std::find(m_lost.begin(), m_lost.end(), unit->unit_id) == m_lost.end()) {
-        m_lost.push_back(unit->unit_id);
+        std::find(m_lost.begin(), m_lost.end(), unit->GetId()) == m_lost.end()) {
+        m_lost.push_back(unit->GetId());
         ++m_units_lost;
 
         SDL_Log("Jev %s: lost %s at %s.", GetTeamName(), JevAi_GetUnitName(unit).c_str(),
