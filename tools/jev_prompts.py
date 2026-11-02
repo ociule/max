@@ -184,6 +184,21 @@ def render_build(o):
         text += ', not enough materials carried'
     if 'defense' in o:
         text += ', a defense: ' + describe_stats(o['defense'])
+    if 'coverage' in o:
+        text += describe_coverage(o['coverage'])
+    return text
+
+
+def describe_coverage(c):
+    covered = ', '.join(f'{count} {name}' for name, count in c['covers'].items())
+    text = f', covers {covered}' if covered else ', covers none of your buildings'
+    text += f", {c['defenses_covering_site']} of your defenses reach this spot"
+    if 'approach' in c:
+        a = c['approach']
+        text += f", covers {a['covered']} of {a['cells']} cells of the way from the enemy seen near {cell(a['from'])}" \
+            ' to your base'
+    if 'nearest_known_enemy' in c:
+        text += f", nearest known enemy {c['nearest_known_enemy']} cells away"
     return text
 
 

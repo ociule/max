@@ -2,6 +2,7 @@
 """Run real-engine forecast, Jev attack or Jev exit checks with local assets and no model calls."""
 import argparse
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -88,6 +89,7 @@ def main():
     shutil.copy2(output / 'checks.exe', runtime / 'checks.exe')
     with (runtime / 'console.log').open('w') as log:
         subprocess.run(['wine', 'checks.exe'], cwd=runtime, stdout=log, stderr=subprocess.STDOUT,
+                       env=dict(os.environ, SDL_AUDIO_DRIVER='dummy'),
                        timeout=120, check=True)
     print((runtime / f'{args.suite}-checks.txt').read_text())
 

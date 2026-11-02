@@ -25,11 +25,11 @@ TEAMS = ['red', 'green', 'blue', 'gray']
 FACTORIES = ('Heavy Vehicle Plant', 'Light Vehicle Plant', 'Air Units Plant', 'Shipyard', 'Training Hall')
 
 
-def run_game(label, world, seed, turns, controllers, mock, model, max_calls, max_input_tokens):
+def run_game(label, world, seed, turns, controllers, mock, model, max_calls, max_input_tokens, exe):
     name = f'{label}-w{world}-s{seed}'
     command = [sys.executable, str(ROOT / 'tools' / 'jev_match.py'), '--name', name, '--model', model,
                '--max-calls', str(max_calls), '--max-input-tokens', str(max_input_tokens)] + \
-              (['--mock'] if mock else []) + \
+              (['--mock'] if mock else []) + (['--exe', exe] if exe else []) + \
               ['--', '--controllers', controllers, '--world', str(world), '--seed', str(seed), '--turns', str(turns)]
     return subprocess.run(command, check=False).returncode
 
@@ -126,6 +126,7 @@ def main():
     parser.add_argument('--model', default='jev-latest')
     parser.add_argument('--max-calls', type=int, default=5000, help='maximum paid requests per game')
     parser.add_argument('--max-input-tokens', type=int, default=5_000_000, help='input-token threshold per game')
+    parser.add_argument('--exe', help='the game to run (default: the current build, see jev_match.py)')
     parser.add_argument('--summarize', metavar='LABEL', help='only print the table of an earlier batch')
     args = parser.parse_args()
 
@@ -145,7 +146,8 @@ def main():
             parser.error('a run folder already exists; use a new label or --summarize')
         with ThreadPoolExecutor(max_workers=len(games)) as pool:
             outcomes = list(pool.map(lambda game: run_game(label, *game, args.turns, args.controllers, args.mock,
-                                                         args.model, args.max_calls, args.max_input_tokens), games))
+                                                         args.model, args.max_calls, args.max_input_tokens,
+                                                         args.exe), games))
     else:
         outcomes = []
 

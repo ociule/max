@@ -621,44 +621,58 @@ bool JevAi::IsFactoryExit(Point cell) const {
 }
 
 bool JevAi::LeavesExits(ResourceID unit_type, Point site) const {
-    // units leave factories and finished buildings to a free cell next to them; keep two
-    constexpr int32_t minimum_exits = 2;
+    // a finished unit leaves to a free cell next to its factory or building site; never take the last one
     const int32_t size = JevAi_GetSize(unit_type);
     const auto in_site = [site, size](Point cell) {
         return cell.x >= site.x && cell.x < site.x + size && cell.y >= site.y && cell.y < site.y + size;
     };
+    // an exit counts when it is free and leads further out, not into a closed pocket
+    const auto has_exit = [this, &in_site](Point corner, int32_t width) {
+        const auto in_parent = [corner, width](Point cell) {
+            return cell.x >= corner.x && cell.x < corner.x + width && cell.y >= corner.y && cell.y < corner.y + width;
+        };
+
+        for (const Point cell : JevAi_GetOutline(corner, width)) {
+            if (in_site(cell) || !JevAi_IsOpenCell(m_team, cell)) {
+                continue;
+            }
+
+            for (const Point next : JevAi_GetOutline(cell, 1)) {
+                if (!in_site(next) && !in_parent(next) && JevAi_IsOpenCell(m_team, next)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    };
 
     // the builder steps out of the finished building
-    int32_t builder_exits = 0;
-
-    for (const Point cell : JevAi_GetOutline(site, size)) {
-        builder_exits += JevAi_IsOpenCell(m_team, cell);
-    }
-
-    if (builder_exits < minimum_exits) {
+    if (!has_exit(site, size)) {
         return false;
     }
 
-    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
-         ++it) {
-        if ((*it).team != m_team || (*it).hits == 0 || !JevAi_IsFactory((*it).GetUnitType())) {
-            continue;
-        }
+    // factories, and buildings being built, whose exits this site would take
+    for (auto* list : {&UnitsManager_StationaryUnits, &UnitsManager_MobileLandSeaUnits}) {
+        for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
+            const bool is_factory = JevAi_IsFactory((*it).GetUnitType());
+            const bool is_building = (*it).GetOrder() == ORDER_BUILD && !((*it).flags & STATIONARY);
 
-        const auto outline = JevAi_GetOutline(Point((*it).grid_x, (*it).grid_y), 2);
+            if ((*it).team != m_team || (*it).hits == 0 || (!is_factory && !is_building)) {
+                continue;
+            }
 
-        if (std::none_of(outline.begin(), outline.end(), in_site)) {
-            continue;
-        }
+            Rect bounds;
 
-        int32_t exits = 0;
+            (*it).GetBounds(&bounds);
 
-        for (const Point cell : outline) {
-            exits += !in_site(cell) && JevAi_IsOpenCell(m_team, cell);
-        }
+            const Point corner(bounds.ulx, bounds.uly);
+            const int32_t width = std::max(1, bounds.lrx - bounds.ulx);
+            const auto outline = JevAi_GetOutline(corner, width);
 
-        if (exits < minimum_exits) {
-            return false;
+            if (std::any_of(outline.begin(), outline.end(), in_site) && !has_exit(corner, width)) {
+                return false;
+            }
         }
     }
 
@@ -721,6 +735,248 @@ bool JevAi::ClearExit(UnitInfo* parent) {
     }
 
     return false;
+}
+
+/// How much a defense is worth near an own building: what the team would lose with it.
+static int32_t JevAi_GetProtectionWeight(ResourceID unit_type) {
+    switch (unit_type) {
+        case GREENHSE:
+            return 4;
+        case HABITAT:
+        case LANDPLT:
+        case LIGHTPLT:
+            return 3;
+        case MININGST:
+            return 2;
+        case POWGEN:
+        case POWERSTN:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static bool JevAi_IsDefense(ResourceID unit_type) {
+    return unit_type == GUNTURRT || unit_type == ARTYTRRT || unit_type == ANTIMSSL || unit_type == ANTIAIR;
+}
+
+nlohmann::ordered_json JevAi::GetDefenseCoverage(ResourceID unit_type, Point site) const {
+    const int32_t range =
+        UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], unit_type)->GetAttribute(ATTRIB_RANGE);
+    nlohmann::ordered_json covers = nlohmann::ordered_json::object();
+    int32_t defenses = 0;
+    int32_t nearest_enemy = -1;
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team != m_team || (*it).hits == 0) {
+            continue;
+        }
+
+        const int32_t distance = JevAi_GetDistance(site, Point((*it).grid_x, (*it).grid_y));
+
+        if (JevAi_GetProtectionWeight((*it).GetUnitType()) > 0 && distance <= range) {
+            const std::string name = JevAi_GetUnitName(it->Get());
+
+            covers[name] = covers.value(name, 0) + 1;
+        }
+
+        if (JevAi_IsDefense((*it).GetUnitType()) && distance <= (*it).GetBaseValues()->GetAttribute(ATTRIB_RANGE)) {
+            ++defenses;
+        }
+    }
+
+    for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_StationaryUnits}) {
+        for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
+            if ((*it).team != m_team && (*it).team != PLAYER_TEAM_ALIEN && (*it).hits > 0 &&
+                (*it).IsVisibleToTeam(m_team)) {
+                const int32_t distance = JevAi_GetDistance(site, Point((*it).grid_x, (*it).grid_y));
+
+                if (nearest_enemy < 0 || distance < nearest_enemy) {
+                    nearest_enemy = distance;
+                }
+            }
+        }
+    }
+
+    nlohmann::ordered_json result = {{"range", range}, {"covers", covers}, {"defenses_covering_site", defenses}};
+    std::vector<Point> approach;
+    Point origin;
+
+    if (GetApproach(approach, origin)) {
+        int32_t covered = 0;
+
+        for (const Point cell : approach) {
+            covered += JevAi_GetDistance(site, cell) <= range;
+        }
+
+        result["approach"] = {
+            {"from", JevAi_PointData(origin)}, {"cells", static_cast<int32_t>(approach.size())}, {"covered", covered}};
+    }
+
+    if (nearest_enemy >= 0) {
+        result["nearest_known_enemy"] = nearest_enemy;
+    }
+
+    return result;
+}
+
+void JevAi::RememberEnemies() {
+    // only what the team sees; units are forgotten after a while, buildings are kept
+    constexpr int32_t unit_memory_turns = 15;
+    const int32_t turn = GameManager_TurnCounter;
+
+    m_sightings.erase(
+        std::remove_if(m_sightings.begin(), m_sightings.end(),
+                       [turn](const Sighting& item) { return !item.building && turn - item.turn > unit_memory_turns; }),
+        m_sightings.end());
+
+    for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_StationaryUnits}) {
+        for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
+            if ((*it).team == m_team || (*it).team == PLAYER_TEAM_ALIEN || (*it).hits == 0 ||
+                !(*it).IsVisibleToTeam(m_team) || (*it).GetUnitType() == CNCT_4W || (*it).GetUnitType() == ROAD) {
+                continue;
+            }
+
+            const Point at((*it).grid_x, (*it).grid_y);
+            const bool building = ((*it).flags & STATIONARY) != 0;
+            auto known = std::find_if(m_sightings.begin(), m_sightings.end(),
+                                      [at](const Sighting& item) { return item.at == at; });
+
+            if (known != m_sightings.end()) {
+                known->turn = turn;
+                known->building = known->building || building;
+
+            } else {
+                m_sightings.push_back({at, turn, building});
+            }
+        }
+    }
+}
+
+bool JevAi::GetApproach(std::vector<Point>& cells, Point& origin) const {
+    // the way enemies come: from their known base, or else from recent sightings, to this base
+    constexpr int32_t approach_length = 10;
+    Point base;
+    int64_t sum_x = 0;
+    int64_t sum_y = 0;
+    int32_t count = 0;
+
+    if (!GetBasePosition(base)) {
+        return false;
+    }
+
+    for (const bool buildings : {true, false}) {
+        for (const auto& sighting : m_sightings) {
+            if (sighting.building == buildings) {
+                sum_x += sighting.at.x;
+                sum_y += sighting.at.y;
+                ++count;
+            }
+        }
+
+        if (count) {
+            break;
+        }
+    }
+
+    if (count == 0) {
+        return false;
+    }
+
+    origin = Point(static_cast<int32_t>(sum_x / count), static_cast<int32_t>(sum_y / count));
+
+    const int32_t length = std::max(1, JevAi_GetDistance(base, origin));
+
+    cells.clear();
+
+    for (int32_t step = 1; step <= std::min(length, approach_length); ++step) {
+        cells.push_back(
+            Point(base.x + (origin.x - base.x) * step / length, base.y + (origin.y - base.y) * step / length));
+    }
+
+    return !cells.empty();
+}
+
+std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_type) const {
+    // a few distinct legal sites, best first: what they protect, less what other defenses already protect
+    constexpr int32_t search_radius = 8;
+    constexpr int32_t maximum_sites = 3;
+    constexpr int32_t minimum_spacing = 3;
+    const int32_t range =
+        UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], unit_type)->GetAttribute(ATTRIB_RANGE);
+    const Point position(builder->grid_x, builder->grid_y);
+    std::vector<std::pair<int64_t, Point>> candidates;
+    std::vector<Point> approach;
+    Point origin;
+
+    GetApproach(approach, origin);
+
+    for (int32_t x = position.x - search_radius; x <= position.x + search_radius; ++x) {
+        for (int32_t y = position.y - search_radius; y <= position.y + search_radius; ++y) {
+            const Point site(x, y);
+
+            if (!JevAi_IsInsideMap(site) || !JevAi_IsSiteFree(m_team, unit_type, site) ||
+                !LeavesExits(unit_type, site)) {
+                continue;
+            }
+
+            int64_t score = 0;
+
+            for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End();
+                 it != it_end; ++it) {
+                const int32_t weight = JevAi_GetProtectionWeight((*it).GetUnitType());
+
+                if ((*it).team != m_team || (*it).hits == 0 || weight == 0 ||
+                    JevAi_GetDistance(site, Point((*it).grid_x, (*it).grid_y)) > range) {
+                    continue;
+                }
+
+                bool covered = false;
+
+                for (auto it2 = UnitsManager_StationaryUnits.Begin(), it2_end = UnitsManager_StationaryUnits.End();
+                     it2 != it2_end && !covered; ++it2) {
+                    covered =
+                        (*it2).team == m_team && (*it2).hits > 0 && JevAi_IsDefense((*it2).GetUnitType()) &&
+                        JevAi_GetDistance(Point((*it2).grid_x, (*it2).grid_y), Point((*it).grid_x, (*it).grid_y)) <=
+                            (*it2).GetBaseValues()->GetAttribute(ATTRIB_RANGE);
+                }
+
+                score += covered ? weight * 5 : weight * 10;
+            }
+
+            if (score == 0) {
+                continue;
+            }
+
+            const nlohmann::ordered_json coverage = GetDefenseCoverage(unit_type, site);
+
+            for (const Point cell : approach) {
+                score += JevAi_GetDistance(site, cell) <= range ? 15 : 0;
+            }
+
+            score -= JevAi_GetDistance(site, position) * 2;
+            candidates.push_back({score, site});
+        }
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    std::vector<Point> sites;
+
+    for (const auto& candidate : candidates) {
+        if (std::all_of(sites.begin(), sites.end(), [&candidate](Point chosen) {
+                return JevAi_GetDistance(chosen, candidate.second) >= minimum_spacing;
+            })) {
+            sites.push_back(candidate.second);
+        }
+
+        if (static_cast<int32_t>(sites.size()) == maximum_sites) {
+            break;
+        }
+    }
+
+    return sites;
 }
 
 bool JevAi::FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const {
@@ -1140,7 +1396,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
     }
 
     for (const ResourceID unit_type : Builder_GetBuildableUnits(m_team, builder->GetUnitType())) {
-        Point site;
+        Point found_site;
 
         // the game only offers buildings that make sense now
         if (unit_type == POWGEN) {
@@ -1165,126 +1421,165 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 continue;
             }
 
-        } else if (unit_type == GUNTURRT || unit_type == ARTYTRRT || unit_type == ANTIMSSL || unit_type == RADAR) {
+        } else if (unit_type == ARTYTRRT || unit_type == ANTIMSSL || unit_type == RADAR) {
+            // Gun Turrets are offered before the first enemy is seen; the others wait for it
             if (!enemies_seen) {
                 continue;
             }
 
-        } else if (unit_type != MININGST) {
+        } else if (unit_type != MININGST && unit_type != GUNTURRT) {
             continue;
         }
 
-        if (!FindBuildSite(builder, unit_type, site)) {
-            continue;
+        std::vector<Point> sites;
+
+        if (unit_type == GUNTURRT) {
+            sites = FindDefenseSites(builder, unit_type);
+
+        } else if (FindBuildSite(builder, unit_type, found_site)) {
+            sites.push_back(found_site);
         }
 
-        const int32_t turns = BuildMenu_GetTurnsToBuild(unit_type, m_team);
-        const int32_t cost = turns * rate;
-        const bool covers_builder = (site.x == builder->grid_x || site.x + 1 == builder->grid_x) &&
-                                    (site.y == builder->grid_y || site.y + 1 == builder->grid_y);
-        std::string facts = "build a " + JevAi_GetTypeName(unit_type) + " at " + JevAi_FormatPoint(site) + ": " +
-                            JevAi_DescribePurpose(m_team, unit_type) + " " + std::to_string(turns) + " turns, " +
-                            std::to_string(cost) + " raw materials, you carry " + std::to_string(builder->storage) +
-                            ", you have " + std::to_string(CountOwnUnits(unit_type)) + " already";
-        json data = {{"action", "build"},
-                     {"type", JevAi_GetTypeName(unit_type)},
-                     {"at", JevAi_PointData(site)},
-                     {"purpose", JevAi_PurposeData(m_team, unit_type)},
-                     {"turns", turns},
-                     {"cost", cost},
-                     {"carried", builder->storage},
-                     {"have", CountOwnUnits(unit_type)}};
-        int32_t score = 0;
+        for (const Point site : sites) {
+            const int32_t turns = BuildMenu_GetTurnsToBuild(unit_type, m_team);
+            const int32_t cost = turns * rate;
+            const bool covers_builder = (site.x == builder->grid_x || site.x + 1 == builder->grid_x) &&
+                                        (site.y == builder->grid_y || site.y + 1 == builder->grid_y);
+            std::string facts = "build a " + JevAi_GetTypeName(unit_type) + " at " + JevAi_FormatPoint(site) + ": " +
+                                JevAi_DescribePurpose(m_team, unit_type) + " " + std::to_string(turns) + " turns, " +
+                                std::to_string(cost) + " raw materials, you carry " + std::to_string(builder->storage) +
+                                ", you have " + std::to_string(CountOwnUnits(unit_type)) + " already";
+            json data = {{"action", "build"},
+                         {"type", JevAi_GetTypeName(unit_type)},
+                         {"at", JevAi_PointData(site)},
+                         {"purpose", JevAi_PurposeData(m_team, unit_type)},
+                         {"turns", turns},
+                         {"cost", cost},
+                         {"carried", builder->storage},
+                         {"have", CountOwnUnits(unit_type)}};
+            int32_t score = 0;
 
-        if (!covers_builder) {
-            facts += ", the builder walks there first";
-            data["walks_there"] = true;
-        }
-
-        if (unit_type == MININGST) {
-            int16_t raw;
-            int16_t gold;
-            int16_t fuel;
-
-            Survey_GetTotalResourcesInArea(site.x, site.y, 1, &raw, &gold, &fuel, false, m_team);
-
-            if (raw + fuel + gold == 0) {
-                continue;
+            if (!covers_builder) {
+                facts += ", the builder walks there first";
+                data["walks_there"] = true;
             }
 
-            facts += ", surveyed resources under it raw " + std::to_string(raw) + " fuel " + std::to_string(fuel) +
-                     " gold " + std::to_string(gold);
-            data["resources"] = {{"raw", raw}, {"fuel", fuel}, {"gold", gold}};
-            score = (raw + fuel + gold) > 0 ? 40 + raw + fuel + gold : -10;
+            if (unit_type == MININGST) {
+                int16_t raw;
+                int16_t gold;
+                int16_t fuel;
 
-        } else {
-            facts += TouchesBase(unit_type, site) ? ", joins your base" : ", not connected to your base";
-            data["joins_base"] = TouchesBase(unit_type, site);
+                Survey_GetTotalResourcesInArea(site.x, site.y, 1, &raw, &gold, &fuel, false, m_team);
 
-            if (JevAi_IsFactory(unit_type)) {
-                score = (CountOwnUnits(unit_type) == 0) ? 60 : 5;
-
-            } else if (unit_type == POWGEN) {
-                score = 20;
-
-            } else if (unit_type == GREENHSE) {
-                score = 30;
-                facts += ", " + std::to_string(workers_given - workers_needed) + " workers spare";
-                data["workers_spare"] = workers_given - workers_needed;
-
-                if (JevAi_GetTurnsLeft() > 0) {
-                    facts += ", " + std::to_string(JevAi_GetTurnsLeft()) + " turns left in the game";
-                    data["turns_left"] = JevAi_GetTurnsLeft();
+                if (raw + fuel + gold == 0) {
+                    continue;
                 }
 
-            } else if (unit_type == HABITAT) {
-                score = 25;
-                facts += ", gives " + std::to_string(-Cargo_GetLifeConsumptionRate(HABITAT)) +
-                         " workers, each Eco-sphere needs 1, you have " +
-                         std::to_string(std::max(0, workers_given - workers_needed)) + " spare";
-                data["gives_workers"] = -Cargo_GetLifeConsumptionRate(HABITAT);
-                data["workers_spare"] = std::max(0, workers_given - workers_needed);
-            }
+                facts += ", surveyed resources under it raw " + std::to_string(raw) + " fuel " + std::to_string(fuel) +
+                         " gold " + std::to_string(gold);
+                data["resources"] = {{"raw", raw}, {"fuel", fuel}, {"gold", gold}};
+                score = (raw + fuel + gold) > 0 ? 40 + raw + fuel + gold : -10;
 
-            if (unit_type == POWGEN) {
-                facts += ", burns " + std::to_string(Cargo_GetFuelConsumptionRate(POWGEN)) + " fuel per turn for " +
-                         std::to_string(-Cargo_GetPowerConsumptionRate(POWGEN)) +
-                         " power; your buildings, with those being built, need " + std::to_string(power_needed) +
-                         " power and your generators give " + std::to_string(power_generated) + ", the base mines " +
-                         std::to_string(fuel_mining_capacity.fuel) + " fuel per turn at most";
-                data["generator"] = {{"burns_fuel", Cargo_GetFuelConsumptionRate(POWGEN)},
-                                     {"gives_power", -Cargo_GetPowerConsumptionRate(POWGEN)},
-                                     {"power_needed", power_needed},
-                                     {"power_generated", power_generated},
-                                     {"fuel_mined_max", fuel_mining_capacity.fuel}};
+            } else {
+                facts += TouchesBase(unit_type, site) ? ", joins your base" : ", not connected to your base";
+                data["joins_base"] = TouchesBase(unit_type, site);
 
-            } else if (Cargo_GetPowerConsumptionRate(unit_type) > 0) {
-                facts += ", needs " + std::to_string(Cargo_GetPowerConsumptionRate(unit_type)) + " power";
-                data["needs_power"] = Cargo_GetPowerConsumptionRate(unit_type);
-                data["power_spare"] = spare_power;
+                if (JevAi_IsFactory(unit_type)) {
+                    score = (CountOwnUnits(unit_type) == 0) ? 60 : 5;
 
-                if (spare_power < Cargo_GetPowerConsumptionRate(unit_type)) {
-                    facts += " and the base has none spare yet";
+                } else if (unit_type == POWGEN) {
+                    score = 20;
+
+                } else if (unit_type == GREENHSE) {
+                    score = 30;
+                    facts += ", " + std::to_string(workers_given - workers_needed) + " workers spare";
+                    data["workers_spare"] = workers_given - workers_needed;
+
+                    if (JevAi_GetTurnsLeft() > 0) {
+                        facts += ", " + std::to_string(JevAi_GetTurnsLeft()) + " turns left in the game";
+                        data["turns_left"] = JevAi_GetTurnsLeft();
+                    }
+
+                } else if (unit_type == HABITAT) {
+                    score = 25;
+                    facts += ", gives " + std::to_string(-Cargo_GetLifeConsumptionRate(HABITAT)) +
+                             " workers, each Eco-sphere needs 1, you have " +
+                             std::to_string(std::max(0, workers_given - workers_needed)) + " spare";
+                    data["gives_workers"] = -Cargo_GetLifeConsumptionRate(HABITAT);
+                    data["workers_spare"] = std::max(0, workers_given - workers_needed);
+                }
+
+                if (unit_type == POWGEN) {
+                    facts += ", burns " + std::to_string(Cargo_GetFuelConsumptionRate(POWGEN)) + " fuel per turn for " +
+                             std::to_string(-Cargo_GetPowerConsumptionRate(POWGEN)) +
+                             " power; your buildings, with those being built, need " + std::to_string(power_needed) +
+                             " power and your generators give " + std::to_string(power_generated) +
+                             ", the base mines " + std::to_string(fuel_mining_capacity.fuel) + " fuel per turn at most";
+                    data["generator"] = {{"burns_fuel", Cargo_GetFuelConsumptionRate(POWGEN)},
+                                         {"gives_power", -Cargo_GetPowerConsumptionRate(POWGEN)},
+                                         {"power_needed", power_needed},
+                                         {"power_generated", power_generated},
+                                         {"fuel_mined_max", fuel_mining_capacity.fuel}};
+
+                } else if (Cargo_GetPowerConsumptionRate(unit_type) > 0) {
+                    facts += ", needs " + std::to_string(Cargo_GetPowerConsumptionRate(unit_type)) + " power";
+                    data["needs_power"] = Cargo_GetPowerConsumptionRate(unit_type);
+                    data["power_spare"] = spare_power;
+
+                    if (spare_power < Cargo_GetPowerConsumptionRate(unit_type)) {
+                        facts += " and the base has none spare yet";
+                    }
                 }
             }
-        }
 
-        if (cost > builder->storage) {
-            facts += ", not enough materials carried";
-            data["not_enough_materials"] = true;
-            score = -50;
-        }
-
-        if (JevAi_GetSize(unit_type) == 1 && unit_type != MININGST) {
-            if (UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], unit_type)
-                    ->GetAttribute(ATTRIB_ATTACK) > 0) {
-                facts += ", a defense: " + JevAi_DescribeType(m_team, unit_type);
-                data["defense"] = JevAi_StatsData(m_team, unit_type);
+            if (cost > builder->storage) {
+                facts += ", not enough materials carried";
+                data["not_enough_materials"] = true;
+                score = -50;
             }
-        }
 
-        m_options.push_back(
-            {"b" + std::to_string(m_options.size()), Action::BUILD, site, unit_type, nullptr, facts, score, data});
+            if (JevAi_GetSize(unit_type) == 1 && unit_type != MININGST) {
+                if (UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], unit_type)
+                        ->GetAttribute(ATTRIB_ATTACK) > 0) {
+                    facts += ", a defense: " + JevAi_DescribeType(m_team, unit_type);
+                    data["defense"] = JevAi_StatsData(m_team, unit_type);
+                }
+            }
+
+            if (JevAi_IsDefense(unit_type)) {
+                const json coverage = GetDefenseCoverage(unit_type, site);
+                std::string covered;
+
+                for (const auto& [name, count] : coverage["covers"].items()) {
+                    covered += (covered.empty() ? "" : ", ") + std::to_string(count.get<int32_t>()) + " " + name;
+                }
+
+                facts += covered.empty() ? ", covers none of your buildings" : ", covers " + covered;
+                facts += ", " + std::to_string(coverage["defenses_covering_site"].get<int32_t>()) +
+                         " of your defenses reach this spot";
+
+                if (coverage.contains("approach")) {
+                    const auto& approach = coverage["approach"];
+
+                    facts += ", covers " + std::to_string(approach["covered"].get<int32_t>()) + " of " +
+                             std::to_string(approach["cells"].get<int32_t>()) +
+                             " cells of the way from the enemy seen near [" +
+                             std::to_string(approach["from"][0].get<int32_t>()) + "," +
+                             std::to_string(approach["from"][1].get<int32_t>()) + "] to your base";
+                }
+
+                if (coverage.contains("nearest_known_enemy")) {
+                    facts += ", nearest known enemy " + std::to_string(coverage["nearest_known_enemy"].get<int32_t>()) +
+                             " cells away";
+                }
+
+                data["coverage"] = coverage;
+                score += 10;
+            }
+
+            m_options.push_back(
+                {"b" + std::to_string(m_options.size()), Action::BUILD, site, unit_type, nullptr, facts, score, data});
+        }
     }
 }
 
@@ -1939,6 +2234,7 @@ void JevAi::BeginTurn() {
         m_units_lost = 0;
         m_lost.clear();
         m_sites.clear();
+        m_sightings.clear();
     }
 
     m_last_turn = GameManager_TurnCounter;
@@ -1968,6 +2264,7 @@ void JevAi::BeginTurn() {
                           [](const auto& unit) { return JevAi_IsConstructionUnit(unit->GetUnitType()); });
 
     BalanceEconomy();
+    RememberEnemies();
 
     std::string buildings;
     Complex* complex = nullptr;

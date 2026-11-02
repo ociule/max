@@ -178,7 +178,8 @@ def main():
                 if bridge.poll() is not None:
                     raise RuntimeError('Bridge did not start; see bridge.log')
                 print(f'{name}: {" ".join(game_args)} in {slot.name}, bridge port {port}', flush=True)
-                environment = dict(os.environ, MAX_JEV_BRIDGE_PORT=str(port))
+                # no audio device: test games are silent even before the hidden game turns sound off
+                environment = dict(os.environ, MAX_JEV_BRIDGE_PORT=str(port), SDL_AUDIO_DRIVER='dummy')
                 game = subprocess.Popen(['wine', 'max-port.exe', *game_args, '--hidden'], cwd=slot, env=environment,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 game.wait(timeout=args.timeout)
