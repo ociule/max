@@ -16,6 +16,7 @@ team's military units saw near the base) and prints one row per game:
 - core lost: base buildings that disappeared from one turn to the next (destroyed, as Jev never removes buildings),
   of which Eco-spheres.
 - eco kept: Eco-spheres standing at the end out of the most there were.
+- points lost: every drop of the team's points added up. A destroyed Eco-sphere takes the points it holds with it.
 
 score (0 to 100) = 40 x coverage + 30 x eco kept + 20 if ready + 10 x (1 - core lost / most core buildings), with
 eco kept 0 when there never was an Eco-sphere and ready counting 10 when there was no contact. An eliminated team
@@ -149,6 +150,8 @@ def score_game(run, team):
     ready_points = 10 if result['ready'] is None else 20 if result['ready'] else 0
     result['score'] = round(40 * result['coverage'] + 30 * eco_share + ready_points +
                             10 * (1 - min(1.0, lost / core_max if core_max else 0.0)))
+    points = [int(m.group(1)) for m in re.finditer(rf'{team} units \d+ .*? points (\d+)', text)]
+    result['points_lost'] = sum(max(0, a - b) for a, b in zip(points, points[1:])) if points else None
     match = re.search(rf'Game over on turn \d+:.*?{team} rank (\d+)', text)
     if match:
         result['rank'] = int(match.group(1))
@@ -159,7 +162,7 @@ def score_game(run, team):
 
 def table(results):
     columns = ['name', 'turns', 'rank', 'score', 'turrets', 'first_turret', 'contact', 'ready', 'pressure', 'coverage',
-               'idle_turrets', 'core_lost', 'eco_lost', 'eco_kept']
+               'idle_turrets', 'core_lost', 'eco_lost', 'eco_kept', 'points_lost']
     lines = ['| ' + ' | '.join(columns) + ' |', '|' + '---|' * len(columns)]
     for row in results:
         lines.append('| ' + ' | '.join('-' if row.get(c) is None else str(row.get(c)) for c in columns) + ' |')
