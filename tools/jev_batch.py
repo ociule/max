@@ -84,6 +84,18 @@ def summarize_game(name, jev_team):
                     lost = re.search(r'units and buildings lost (\d+)', fields.group(3))
                     result.setdefault('enemy_lost', int(lost.group(1)) if lost else None)
 
+    # raw materials mined on turns that began with full storage are lost; the income at the end of the game
+    full_turns = {}
+    if (run / 'questions.jsonl').exists():
+        for line in (run / 'questions.jsonl').read_text().splitlines():
+            state = json.loads(line).get('request', {}).get('state', {})
+            base, mining = state.get('base'), state.get('mining_per_turn')
+            if base and mining and state.get('turn') not in full_turns:
+                full_turns[state['turn']] = mining['raw'] if base['raw_capacity'] and \
+                    base['raw'] >= base['raw_capacity'] else 0
+                result['raw_per_turn'] = mining['raw']
+    result['raw_lost'] = sum(full_turns.values()) if full_turns else None
+
     questions = 0
     tokens = 0
     errors = 0
@@ -109,8 +121,8 @@ def table(results):
         return '-' if value is None else str(value)
 
     header = ('| game | status | turns | rank | points | enemy points | worth | enemy worth | units / buildings | '
-              'enemy units / buildings | first factory | first points | mines | second mine | lost | enemy lost | '
-              'questions | cost |')
+              'enemy units / buildings | first factory | first points | mines | second mine | raw per turn | raw lost | '
+              'lost | enemy lost | questions | cost |')
     lines = [header, '|' + '---|' * (header.count('|') - 1)]
     for row in results:
         cost = row.get('input_tokens', 0) * 0.042 / 1e6
@@ -118,7 +130,8 @@ def table(results):
             row['name'], row.get('status', '?'), cell(row, 'turns_played'), cell(row, 'rank'), cell(row, 'points'), cell(row, 'enemy_points'),
             cell(row, 'worth'), cell(row, 'enemy_worth'), f"{cell(row, 'units')} / {cell(row, 'buildings')}",
             f"{cell(row, 'enemy_units')} / {cell(row, 'enemy_buildings')}", cell(row, 'first_factory_turn'),
-            cell(row, 'first_points_turn'), cell(row, 'mines_max'), cell(row, 'second_mine_turn'), cell(row, 'lost'),
+            cell(row, 'first_points_turn'), cell(row, 'mines_max'), cell(row, 'second_mine_turn'),
+            cell(row, 'raw_per_turn'), cell(row, 'raw_lost'), cell(row, 'lost'),
             cell(row, 'enemy_lost'), cell(row, 'questions'),
             f'${cost:.3f}']) + ' |')
     return '\n'.join(lines)

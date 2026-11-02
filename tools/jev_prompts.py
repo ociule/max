@@ -31,11 +31,12 @@ INSTRUCTIONS = {
         'other strong combat units, and new Constructors. 2. A building that needs power does not work while '
         'the base has no spare power; Engineers build Power Generators quickly, so start the factory and let '
         'an Engineer add power. 3. Keep builders out of danger. If your team has only one Constructor and no '
-        'factory, losing it loses the game. 4. Put mining stations on surveyed resources to raise income; '
-        'surveyors find those resources near the base. 5. Builders use the raw materials they carry; refill '
-        'at the base when they carry too little. 6. Once a factory is started, build a Habitat for workers '
-        'and then Eco-spheres, with Power Generators for them. Buildings that touch your base join it and '
-        'share its materials, power and workers.'),
+        'factory, losing it loses the game. 4. Put mining stations on surveyed resources to raise income, raw'
+        ' materials first: they pay for everything; surveyors find those resources near the base. Raw '
+        'materials mined while the base storage is full are lost, so spend them, build faster or add storage.'
+        ' 5. Builders use the raw materials they carry; refill at the base when they carry too little. 6. '
+        'Once a factory is started, build a Habitat for workers and then Eco-spheres, with Power Generators '
+        'for them. Buildings that touch your base join it and share its materials, power and workers.'),
     'production': (
         'You manage production for your team in M.A.X., a turn-based strategy game. Military units are '
         'commanded separately; you choose what this factory produces next, or nothing. A unit takes the given'
@@ -204,6 +205,13 @@ def render_build(o):
             f"{cell(o['link']['mine_at'])} to your base; it works once joined"
     if 'coverage' in o:
         text += describe_coverage(o['coverage'])
+    if 'storage' in o:
+        st = o['storage']
+        text += f", stores raw materials: your base holds {st['base_raw']} of {st['capacity']} and loses what it mines " \
+            f"while full; this adds {st['adds']}"
+    if 'speed' in o:
+        sp = o['speed']
+        text += f", built at x{sp['rate']} speed: {sp['turns']} turns and {sp['cost']} raw materials instead"
     return text
 
 
