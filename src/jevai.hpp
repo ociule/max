@@ -61,6 +61,7 @@ class JevAi final : public NoneAi {
 
     /// A building site a builder is still walking to.
     struct Site {
+        /// UnitInfo::GetId(); UnitInfo::unit_id is only the per type number shown in unit names.
         uint16_t unit_id;
         ResourceID unit_type;
         Point site;
