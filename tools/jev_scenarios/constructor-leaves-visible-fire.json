@@ -1,0 +1,316 @@
+{
+ "id": "constructor-leaves-visible-fire",
+ "source": "runs/b3-baseline-w0-s42/questions.jsonl#209",
+ "why": "A damaged Constructor is under visible fire and has safe escape cells; prefer leaving exposure to staying. Refills remain unclassified because their strategic value is uncertain.",
+ "label": "agent",
+ "holdout": true,
+ "expect": {
+  "acceptable": [
+   {
+    "action": "move",
+    "danger<": 1
+   }
+  ],
+  "forbidden": [
+   {
+    "action": "stay"
+   }
+  ]
+ },
+ "request": {
+  "id": 210,
+  "team": "red",
+  "state": {
+   "game": "M.A.X., turn-based strategy",
+   "turn": 43,
+   "you": {
+    "type": "Constructor",
+    "position": [
+     29,
+     24
+    ],
+    "hits": 18,
+    "max_hits": 24,
+    "moves_left": 5,
+    "danger_here": 12,
+    "materials_carried": 12,
+    "materials_capacity": 60
+   },
+   "score": {
+    "your_points": 0,
+    "best_enemy_points": 0,
+    "turns_left": 57
+   },
+   "team": {
+    "factories": 1,
+    "constructors": 2,
+    "engineers": 2,
+    "combat_units": 2
+   },
+   "mining_per_turn": {
+    "raw": 8,
+    "fuel": 8,
+    "gold": 0
+   },
+   "base": {
+    "raw": 25,
+    "raw_capacity": 25,
+    "fuel": 0,
+    "fuel_capacity": 0,
+    "gold": 0,
+    "power_left": 2,
+    "workers_left": 3
+   },
+   "buildings": {
+    "Eco-sphere": 2,
+    "Heavy Vehicle Plant": 1,
+    "Power Generator": 4,
+    "Mining Station": 1,
+    "Habitat": 1
+   },
+   "units": {
+    "Tank": 2,
+    "Constructor": 2,
+    "Scout": 1,
+    "Engineer": 2,
+    "Surveyor": 1
+   },
+   "explored_cells": 6453,
+   "map_cells": 12544,
+   "enemies_seen": 1,
+   "units_lost": 1
+  },
+  "questions": {
+   "construction": {
+    "type": "choice",
+    "instructions": "",
+    "criteria": {}
+   }
+  },
+  "options": {
+   "m0": {
+    "action": "move",
+    "direction": "N",
+    "distance": 2,
+    "to": [
+     29,
+     22
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "away_from_danger": true,
+    "nearest_unexplored": 11,
+    "nearest_enemy": 4
+   },
+   "m1": {
+    "action": "move",
+    "direction": "N",
+    "distance": 5,
+    "to": [
+     29,
+     19
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "away_from_danger": true,
+    "nearest_unexplored": 9,
+    "nearest_enemy": 7
+   },
+   "m2": {
+    "action": "move",
+    "direction": "NE",
+    "distance": 3,
+    "to": [
+     32,
+     21
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "away_from_danger": true,
+    "nearest_unexplored": 13,
+    "nearest_enemy": 7
+   },
+   "m3": {
+    "action": "move",
+    "direction": "S",
+    "distance": 5,
+    "to": [
+     29,
+     29
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "away_from_danger": true,
+    "nearest_unexplored": 7,
+    "nearest_enemy": 3
+   },
+   "m4": {
+    "action": "move",
+    "direction": "W",
+    "distance": 5,
+    "to": [
+     24,
+     24
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "away_from_danger": true,
+    "nearest_unexplored": 6,
+    "nearest_enemy": 3
+   },
+   "m5": {
+    "action": "move",
+    "direction": "NW",
+    "distance": 1,
+    "to": [
+     28,
+     23
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "away_from_danger": true,
+    "nearest_unexplored": 9,
+    "nearest_enemy": 3
+   },
+   "m6": {
+    "action": "move",
+    "direction": "NW",
+    "distance": 3,
+    "to": [
+     26,
+     21
+    ],
+    "revealed": 0,
+    "danger": 0,
+    "away_from_danger": true,
+    "nearest_unexplored": 8,
+    "nearest_enemy": 5
+   },
+   "b7": {
+    "action": "build",
+    "type": "Mining Station",
+    "at": [
+     35,
+     26
+    ],
+    "purpose": {
+     "type": "Mining Station",
+     "key": "MININGST"
+    },
+    "turns": 12,
+    "cost": 24,
+    "carried": 12,
+    "have": 1,
+    "walks_there": true,
+    "resources": {
+     "raw": 0,
+     "fuel": 3,
+     "gold": 0
+    },
+    "not_enough_materials": true
+   },
+   "b8": {
+    "action": "build",
+    "type": "Light Vehicle Plant",
+    "at": [
+     28,
+     23
+    ],
+    "purpose": {
+     "type": "Light Vehicle Plant",
+     "key": "LIGHTPLT",
+     "factory": {
+      "combat": [],
+      "other": [
+       "Scout",
+       "Surveyor",
+       "Engineer",
+       "Repair Unit",
+       "Supply Truck",
+       "Fuel Truck",
+       "Gold Truck",
+       "Mobile Anti Aircraft",
+       "Mine Layer",
+       "Bulldozer",
+       "Personnel Carrier"
+      ]
+     }
+    },
+    "turns": 10,
+    "cost": 20,
+    "carried": 12,
+    "have": 0,
+    "joins_base": true,
+    "needs_power": 1,
+    "power_spare": 2,
+    "not_enough_materials": true
+   },
+   "b9": {
+    "action": "build",
+    "type": "Heavy Vehicle Plant",
+    "at": [
+     28,
+     23
+    ],
+    "purpose": {
+     "type": "Heavy Vehicle Plant",
+     "key": "LANDPLT",
+     "factory": {
+      "combat": [
+       "Tank",
+       "Assault Gun",
+       "Rocket Launcher",
+       "Missile Crawler"
+      ],
+      "other": [
+       "Constructor",
+       "Scanner"
+      ]
+     }
+    },
+    "turns": 20,
+    "cost": 40,
+    "carried": 12,
+    "have": 1,
+    "joins_base": true,
+    "needs_power": 1,
+    "power_spare": 2,
+    "not_enough_materials": true
+   },
+   "b10": {
+    "action": "build",
+    "type": "Eco-sphere",
+    "at": [
+     28,
+     23
+    ],
+    "purpose": {
+     "type": "Eco-sphere",
+     "key": "GREENHSE"
+    },
+    "turns": 10,
+    "cost": 20,
+    "carried": 12,
+    "have": 2,
+    "joins_base": true,
+    "workers_spare": 1,
+    "turns_left": 57,
+    "needs_power": 1,
+    "power_spare": 2,
+    "not_enough_materials": true
+   },
+   "r11": {
+    "action": "refill",
+    "amount": 25,
+    "from": "Eco-sphere",
+    "carried": 12,
+    "capacity": 60,
+    "base_raw": 25
+   },
+   "stay": {
+    "action": "stay",
+    "danger": 12
+   }
+  }
+ }
+}

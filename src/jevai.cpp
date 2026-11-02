@@ -1490,9 +1490,14 @@ json JevAi::GetState(UnitInfo* unit) const {
                      {"engineers", CountOwnUnits(ENGINEER)},
                      {"combat_units", combat_units}};
 
+    // Production questions describe this factory's network, not an arbitrary base.
+    const bool is_factory = JevAi_IsFactory(unit->GetUnitType());
+    Complex* local_complex = is_factory ? unit->GetComplex() : nullptr;
+
     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
          ++it) {
-        if ((*it).team == m_team && (*it).GetComplex()) {
+        if ((*it).team == m_team && (*it).GetComplex() &&
+            (!is_factory || (*it).GetComplex() == local_complex)) {
             Cargo materials;
             Cargo capacity;
 
@@ -1513,6 +1518,19 @@ json JevAi::GetState(UnitInfo* unit) const {
                              {"workers_left", (*it).GetComplex()->workers}};
             break;
         }
+    }
+
+    if (is_factory && local_complex) {
+        const Cargo balance = ProductionManager_PreviewProduction(m_team, local_complex, unit);
+        state["production"] = {
+            {"raw_per_turn", Cargo_GetRawConsumptionRate(unit->GetUnitType(), 1)},
+            {"power_needed", Cargo_GetPowerConsumptionRate(unit->GetUnitType())},
+            {"workers_needed", Cargo_GetLifeConsumptionRate(unit->GetUnitType())},
+            {"can_run_next_turn_without_reallocating", balance.raw >= 0 && balance.fuel >= 0 &&
+                                                         balance.gold >= 0 && balance.power >= 0 && balance.life >= 0},
+            {"balance_after_generator_switching", {{"raw", balance.raw}, {"fuel", balance.fuel},
+                                                   {"gold", balance.gold}, {"power", balance.power},
+                                                   {"workers", balance.life}}}};
     }
 
     state["buildings"] = buildings;
