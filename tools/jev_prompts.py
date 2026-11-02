@@ -46,7 +46,8 @@ INSTRUCTIONS = {
         'fight ground units, a mix of strong and long range ones. 3. Raw materials that pile up are wasted, '
         'and the base loses what it mines while its storage is full: then produce at a faster speed, which '
         'draws more from the base every turn. 4. Produce nothing only when the base cannot afford anything '
-        'useful.'),
+        'useful. The base can afford a unit when it mines at least the raw materials the factory uses per '
+        "turn, even when its stock is empty: the factory draws from each turn's mining."),
     'military': (
         'You command one military or support unit of your team in M.A.X., a turn-based strategy game on a map'
         ' of square cells. Construction is managed separately; your job is to find and destroy the enemy '
@@ -234,6 +235,8 @@ def describe_coverage(c):
 def render_produce(o):
     text = f"produce {article(o['type'])} {o['type']}: {describe_purpose(o['purpose'])} {o['turns']} turns, " \
         f"{o['cost']} raw materials, {describe_stats(o['stats'])}, you have {o['have']}"
+    if 'base_mines' in o:
+        text += f", uses {o['per_turn']} raw materials per turn from the base, which mines {o['base_mines']} per turn"
     if 'speed' in o:
         sp = o['speed']
         text += f", produced at x{sp['rate']} speed: {sp['turns']} turn{'' if sp['turns'] == 1 else 's'} and " \
@@ -255,6 +258,8 @@ def render_attack(o):
 
 def render_produce_nothing(o):
     text = f"produce nothing this turn; the base has {o['base_raw']} of {o['base_raw_capacity']} raw materials stored"
+    if 'base_mines' in o:
+        text += f" and mines {o['base_mines']} per turn"
     if o['base_raw_capacity'] and o['base_raw'] >= o['base_raw_capacity']:
         text += ', storage is full, so the raw materials mined while nothing is built are lost'
     return text
