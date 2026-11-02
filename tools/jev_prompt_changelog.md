@@ -3,6 +3,32 @@
 One entry per prompt change tried with `tools/jev_suite.py` or a game batch: what changed, the scores before and
 after, kept or reverted. Newest first. The suite's margin varies by about ±0.03 between runs of the same prompt.
 
+## 2026-11-02 late: expansion, surveying, power for mines, raw materials
+
+Development maps 0:42, 3:7, 6:13, 100 turns, jev-1.14.0.
+
+| Batch | Build | Ranks | Points | Worth (classic) | Mines (2nd) | Raw per turn | Raw lost |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `b11-macro` | `e9f0891` mine sites, connectors | 1 / 0 / crash | 95 / 0 / - | 585 / 20 / - | 2 (47) / 2 (62) / - | - | - |
+| `b13-survey` | `83570ab` survey near base, unique ids | 1 / 2 / 1 | 64 / 0 / 43 | 785 (976) / 328 / 844 (819) | 4 / 5 / 4 | 13 / - / 16 | 241 / 308 / 392 |
+| `b14-mine-power` | `d801f90` mines get power first | 1 / 2 / 1 | 88 / 0 / 70 | 591 / 204 / 821 | 3 / 3 / 2 | 15 / 16 / 12 | 363 / 396 / 324 |
+| `b15-raw` | `9b00f11` raw-first sites, build speeds, storage | 1 / 1 / 1 | 74 / 36 / 79 | 500 / 846 / 804 | 5 / 5 / 3 | 20 / - / 16 | 50 / 74 / 0 |
+
+- `b11`: mine sites offered had 4-5 resources and no far site: the ground near the base was never surveyed (on world 3
+  only the starting mine's cells). Replayed Surveyor questions with base distances did not change a choice; a
+  "survey around your base" option did (`b13`: best site 18-19). `b11` world 6 crashed on turn 9 (exit 3) after
+  the GetSpriteFrame assertion; a logging build in `b12` (stopped, invalid) showed an Assault Gun with an Engineer's
+  build order: saved sites were keyed by `UnitInfo::unit_id`, the per type number. Fixed with `GetId()`.
+- `b13`: new mines stood switched off (no spare power, so no fuel for more generators). Fixed in `d801f90`.
+- Raw materials: before `b15`, 15-40% of all raw mined was lost to full storage (192-396 per game). `b15` cut it to
+  0-74 and won all three maps for the first time since `b4`; world 3 scored points for the first time since `b4`.
+- Gun Turrets are built by Engineers and Eco-spheres by Constructors, so they never compete in one question; the
+  Engineers turn the base's stock into turrets. Turret wording replays did not move choices.
+- Kept as fact corrections in the prompts: an Eco-sphere holds its points, raw materials mined while storage is full
+  are lost. `b16-spend` (`eb1df34`) adds factory speed rows, up to four plants of a type and a spending rule (suite
+  13/18, was 12). Next candidate `9585dd4`: turret sites only for what no defense covers, halted factories asked
+  again only when they can run.
+
 ## 2026-11-02 night: defense batch, macro gap, Eco-spheres hold their points
 
 Development maps 0:42, 3:7, 6:13, 100 turns, jev-1.14.0. Defense scores from `tools/jev_defense.py`.
