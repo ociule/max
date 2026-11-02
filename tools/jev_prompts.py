@@ -167,9 +167,14 @@ def render_build(o):
     if 'resources' in o:
         r = o['resources']
         text += f", surveyed resources under it raw {r['raw']} fuel {r['fuel']} gold {r['gold']}"
+        if o.get('joins_base'):
+            text += ', joins your base'
+        elif 'connectors_needed' in o:
+            text += f", not joined to your base: it works once {o['connectors_needed']} connectors join it, which " \
+                'Engineers lay'
         if 'base_mining' in o:
             m = o['base_mining']
-            text += f", joins your base, a station mines up to 16 per turn in all; your base mines raw {m['raw']} " \
+            text += f", a station mines up to 16 per turn in all; your base mines raw {m['raw']} " \
                 f"fuel {m['fuel']} gold {m['gold']} per turn from {m['stations']} stations"
     else:
         text += ', joins your base' if o.get('joins_base') else ', not connected to your base'
@@ -192,6 +197,9 @@ def render_build(o):
         text += ', not enough materials carried'
     if 'defense' in o:
         text += ', a defense: ' + describe_stats(o['defense'])
+    if 'link' in o:
+        text += f", one of {o['link']['left']} connectors still needed to join the Mining Station at " \
+            f"{cell(o['link']['mine_at'])} to your base; it works once joined"
     if 'coverage' in o:
         text += describe_coverage(o['coverage'])
     return text
