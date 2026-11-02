@@ -64,40 +64,43 @@ void RuntimeJevExitsChecks() {
     }
     Check(!ai.IsFactoryExit(Point(plant.x - 2, plant.y)), "A cell two away is no exit");
 
-    // fill all exits but three with power generators
-    for (size_t i = 3; i < outline.size(); ++i) {
+    // fill all exits but two with power generators
+    for (size_t i = 2; i < outline.size(); ++i) {
         UnitsManager_SpawnUnit(POWGEN, PLAYER_TEAM_RED, outline[i].x, outline[i].y, nullptr);
     }
-    Check(ai.LeavesExits(POWGEN, outline[0]), "A building may take an exit while two others stay free");
-
-    UnitsManager_SpawnUnit(POWGEN, PLAYER_TEAM_RED, outline[2].x, outline[2].y, nullptr);
-    Check(!ai.LeavesExits(POWGEN, outline[0]), "A building may not take one of the last two exits");
-    Check(!ai.LeavesExits(POWGEN, outline[1]), "Neither of the last two exits");
+    Check(ai.LeavesExits(POWGEN, outline[0]), "A building may take an exit while another one stays free");
     Check(ai.LeavesExits(POWGEN, Point(plant.x - 3, plant.y)), "A building away from the factory is allowed");
 
-    // own units on an exit can move away, so they do not count as blocking it
+    UnitsManager_SpawnUnit(POWGEN, PLAYER_TEAM_RED, outline[1].x, outline[1].y, nullptr);
+    Check(!ai.LeavesExits(POWGEN, outline[0]), "A building may not take the last exit");
+
+    // own units on the last exit can move away, so they do not count as blocking it
     auto tank = UnitsManager_SpawnUnit(TANK, PLAYER_TEAM_RED, outline[0].x, outline[0].y, nullptr);
     tank->SetOrder(ORDER_AWAIT);
     tank->SetOrderState(ORDER_STATE_EXECUTING_ORDER);
-    Check(!ai.LeavesExits(POWGEN, outline[1]), "An own unit on the other exit does not make room");
+    Check(ai.LeavesExits(POWGEN, Point(plant.x - 3, plant.y)), "An own unit on the last exit leaves it usable");
 
-    // an Engineer next to the factory never picks the last exits
-    auto engineer = UnitsManager_SpawnUnit(ENGINEER, PLAYER_TEAM_RED, plant.x - 2, plant.y, nullptr);
+    // an Engineer next to the factory never picks the last exit
+    auto engineer = UnitsManager_SpawnUnit(ENGINEER, PLAYER_TEAM_RED, plant.x - 3, plant.y + 1, nullptr);
     engineer->storage = 40;
     engineer->SetOrder(ORDER_AWAIT);
     engineer->SetOrderState(ORDER_STATE_EXECUTING_ORDER);
     Point site;
     Check(ai.FindBuildSite(engineer.Get(), POWGEN, site), "The Engineer finds a Power Generator site");
-    Check(site != outline[0] && site != outline[1], "The site leaves the last two factory exits free");
+    Check(site != outline[0], "The site leaves the factory's last exit free");
 
-    // a site boxed in on all sides would trap its builder
-    const Point box(origin.x, origin.y);
-    for (const Point cell : std::vector<Point>{{box.x - 1, box.y}, {box.x + 1, box.y}, {box.x, box.y - 1},
-                                               {box.x, box.y + 1}, {box.x - 1, box.y - 1}, {box.x + 1, box.y + 1},
-                                               {box.x - 1, box.y + 1}}) {
-        UnitsManager_SpawnUnit(POWGEN, PLAYER_TEAM_RED, cell.x, cell.y, nullptr);
+    // a site whose only free neighbor is a closed pocket would trap its builder
+    const Point box(origin.x + 1, origin.y + 1);
+    for (int x = box.x - 2; x <= box.x + 2; ++x) {
+        for (int y = box.y - 2; y <= box.y + 2; ++y) {
+            const bool ring = x == box.x - 2 || x == box.x + 2 || y == box.y - 2 || y == box.y + 2;
+            const bool inner = !ring && (x != box.x || y != box.y) && !(x == box.x + 1 && y == box.y);
+            if ((ring || inner) && Access_IsAccessible(POWGEN, PLAYER_TEAM_RED, x, y, AccessModifier_SameClassBlocks)) {
+                UnitsManager_SpawnUnit(POWGEN, PLAYER_TEAM_RED, x, y, nullptr);
+            }
+        }
     }
-    Check(!ai.LeavesExits(GUNTURRT, box), "A site with one free neighbor would trap its builder");
+    Check(!ai.LeavesExits(GUNTURRT, box), "A site whose only exit is a closed pocket would trap its builder");
     report << "PASS all " << checks << " checks" << std::endl;
     std::exit(0);
 }

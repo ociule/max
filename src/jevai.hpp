@@ -67,7 +67,15 @@ class JevAi final : public NoneAi {
         int32_t turn;
     };
 
+    /// Where the team saw an enemy: buildings are kept, units for a few turns.
+    struct Sighting {
+        Point at;
+        int32_t turn;
+        bool building;
+    };
+
     State m_state{State::SELECT};
+    std::vector<Sighting> m_sightings;
     std::vector<Site> m_sites;
     std::vector<SmartPointer<UnitInfo>> m_units;
     std::vector<SmartPointer<UnitInfo>> m_handled;
@@ -106,6 +114,10 @@ class JevAi final : public NoneAi {
     bool TouchesBase(ResourceID unit_type, Point site) const;
     bool FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const;
     bool LeavesExits(ResourceID unit_type, Point site) const;
+    std::vector<Point> FindDefenseSites(UnitInfo* builder, ResourceID unit_type) const;
+    void RememberEnemies();
+    bool GetApproach(std::vector<Point>& cells, Point& origin) const;
+    nlohmann::ordered_json GetDefenseCoverage(ResourceID unit_type, Point site) const;
     bool IsFactoryExit(Point cell) const;
     bool ClearExit(UnitInfo* parent);
     bool ReleaseFinishedUnit();
