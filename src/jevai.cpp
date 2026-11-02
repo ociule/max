@@ -1624,7 +1624,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             }
 
         } else if (JevAi_IsFactory(unit_type)) {
-            if ((unit_type != LIGHTPLT && unit_type != LANDPLT) || CountOwnUnits(unit_type) >= 2) {
+            if ((unit_type != LIGHTPLT && unit_type != LANDPLT) || CountOwnUnits(unit_type) >= 4) {
                 continue;
             }
 
@@ -1918,6 +1918,12 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
     }
 
     const int32_t rate = Cargo_GetRawConsumptionRate(factory->GetUnitType(), 1);
+    Cargo mining;
+    Cargo mining_capacity;
+
+    if (factory->GetComplex()) {
+        factory->GetComplex()->GetCargoMining(mining, mining_capacity);
+    }
 
     for (const ResourceID unit_type : Builder_GetBuildableUnits(m_team, factory->GetUnitType())) {
         const int32_t turns = BuildMenu_GetTurnsToBuild(unit_type, m_team);
@@ -1946,6 +1952,38 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
                               {"cost", turns * rate},
                               {"stats", JevAi_StatsData(m_team, unit_type)},
                               {"have", CountOwnUnits(unit_type)}}});
+
+        // the faster rows: a factory draws more raw materials from the base each turn, which spends a surplus
+        const Option normal = m_options.back();
+        int32_t fastest_turns;
+
+        factory->GetTurnsToBuild(unit_type, 1, &fastest_turns);
+
+        for (const int32_t speed : {2, 4}) {
+            int32_t speed_turns;
+            const int32_t speed_cost = factory->GetTurnsToBuild(unit_type, speed, &speed_turns);
+            const int32_t per_turn = Cargo_GetRawConsumptionRate(factory->GetUnitType(), speed);
+
+            if (speed_turns >= fastest_turns) {
+                continue;
+            }
+
+            Option fast = normal;
+
+            fast.key = "p" + std::to_string(m_options.size());
+            fast.build_rate = speed;
+            fast.facts += ", produced at x" + std::to_string(speed) + " speed: " + std::to_string(speed_turns) +
+                          (speed_turns == 1 ? " turn" : " turns") + " and " + std::to_string(speed_cost) +
+                          " raw materials instead, " + std::to_string(per_turn) +
+                          " per turn from the base, which mines " + std::to_string(mining.raw) + " per turn";
+            fast.data["speed"] = {{"rate", speed},
+                                  {"turns", speed_turns},
+                                  {"cost", speed_cost},
+                                  {"per_turn", per_turn},
+                                  {"base_mines", mining.raw}};
+            fastest_turns = speed_turns;
+            m_options.push_back(fast);
+        }
     }
 
     m_options.push_back(
@@ -2546,7 +2584,7 @@ void JevAi::Apply(const std::string& answer) {
 
         case Action::PRODUCE: {
             BalanceEconomy();
-            StartBuilding(&*m_unit, option->unit_type, Point(0, 0));
+            StartBuilding(&*m_unit, option->unit_type, Point(0, 0), option->build_rate);
 
             m_wait_start = SDL_GetTicks();
             m_state = State::WAIT_FOR_UNIT;
