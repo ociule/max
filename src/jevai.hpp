@@ -87,6 +87,7 @@ class JevAi final : public NoneAi {
     int32_t m_turn_failed_moves{0};
     int32_t m_turn_builds{0};
     int32_t m_turn_attacks{0};
+    int32_t m_turn_exit_clears{0};
     Action m_last_action{Action::STAY};
     int32_t m_units_lost{0};
     int32_t m_explored_cells{0};
@@ -104,6 +105,9 @@ class JevAi final : public NoneAi {
     int32_t GetDistanceToOwnBuilder(Point point) const;
     bool TouchesBase(ResourceID unit_type, Point site) const;
     bool FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const;
+    bool LeavesExits(ResourceID unit_type, Point site) const;
+    bool IsFactoryExit(Point cell) const;
+    bool ClearExit(UnitInfo* parent);
     bool ReleaseFinishedUnit();
     void BalanceEconomy();
     UnitInfo* FindIdleFactory() const;

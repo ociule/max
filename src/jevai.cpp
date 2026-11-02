@@ -583,6 +583,146 @@ bool JevAi::TouchesBase(ResourceID unit_type, Point site) const {
     return false;
 }
 
+/// The cells around a building or site, where units leave it.
+static std::vector<Point> JevAi_GetOutline(Point corner, int32_t size) {
+    std::vector<Point> cells;
+
+    for (int32_t x = corner.x - 1; x <= corner.x + size; ++x) {
+        for (int32_t y = corner.y - 1; y <= corner.y + size; ++y) {
+            const bool inside = x >= corner.x && x < corner.x + size && y >= corner.y && y < corner.y + size;
+
+            if (!inside && JevAi_IsInsideMap(Point(x, y))) {
+                cells.push_back(Point(x, y));
+            }
+        }
+    }
+
+    return cells;
+}
+
+/// Free for a land unit to stand on, counting own units as able to move away.
+static bool JevAi_IsOpenCell(uint16_t team, Point cell) {
+    return Access_IsAccessible(TANK, team, cell.x, cell.y, AccessModifier_EnemySameClassBlocks);
+}
+
+bool JevAi::IsFactoryExit(Point cell) const {
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team == m_team && (*it).hits > 0 && JevAi_IsFactory((*it).GetUnitType())) {
+            const Point corner((*it).grid_x, (*it).grid_y);
+
+            if (cell.x >= corner.x - 1 && cell.x <= corner.x + 2 && cell.y >= corner.y - 1 && cell.y <= corner.y + 2) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool JevAi::LeavesExits(ResourceID unit_type, Point site) const {
+    // units leave factories and finished buildings to a free cell next to them; keep two
+    constexpr int32_t minimum_exits = 2;
+    const int32_t size = JevAi_GetSize(unit_type);
+    const auto in_site = [site, size](Point cell) {
+        return cell.x >= site.x && cell.x < site.x + size && cell.y >= site.y && cell.y < site.y + size;
+    };
+
+    // the builder steps out of the finished building
+    int32_t builder_exits = 0;
+
+    for (const Point cell : JevAi_GetOutline(site, size)) {
+        builder_exits += JevAi_IsOpenCell(m_team, cell);
+    }
+
+    if (builder_exits < minimum_exits) {
+        return false;
+    }
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team != m_team || (*it).hits == 0 || !JevAi_IsFactory((*it).GetUnitType())) {
+            continue;
+        }
+
+        const auto outline = JevAi_GetOutline(Point((*it).grid_x, (*it).grid_y), 2);
+
+        if (std::none_of(outline.begin(), outline.end(), in_site)) {
+            continue;
+        }
+
+        int32_t exits = 0;
+
+        for (const Point cell : outline) {
+            exits += !in_site(cell) && JevAi_IsOpenCell(m_team, cell);
+        }
+
+        if (exits < minimum_exits) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool JevAi::ClearExit(UnitInfo* parent) {
+    // the exits are only taken by own units: move one of them out of the way, as a human player would
+    constexpr int32_t maximum_clears_per_turn = 6;
+    const int32_t size = (parent->flags & BUILDING) ? 2 : 1;
+
+    if (m_turn_exit_clears >= maximum_clears_per_turn) {
+        return false;
+    }
+
+    for (const Point cell : JevAi_GetOutline(Point(parent->grid_x, parent->grid_y), size)) {
+        UnitInfo* blocker = Access_GetTeamUnit(cell.x, cell.y, m_team, MOBILE_LAND_UNIT);
+
+        if (!blocker || blocker == parent || !Task_IsReadyToTakeOrders(blocker) || blocker->speed == 0) {
+            continue;
+        }
+
+        // the nearest free cell that is no factory exit
+        Point best;
+        int32_t best_distance = INT32_MAX;
+
+        for (int32_t x = cell.x - 4; x <= cell.x + 4; ++x) {
+            for (int32_t y = cell.y - 4; y <= cell.y + 4; ++y) {
+                const Point target(x, y);
+                const int32_t distance = Access_GetSquaredDistance(target, cell);
+
+                if (JevAi_IsInsideMap(target) && distance > 1 && distance < best_distance && !IsFactoryExit(target) &&
+                    Access_IsAccessible(blocker->GetUnitType(), m_team, x, y, AccessModifier_SameClassBlocks)) {
+                    best = target;
+                    best_distance = distance;
+                }
+            }
+        }
+
+        if (best_distance == INT32_MAX) {
+            continue;
+        }
+
+        SDL_Log("Jev %s: %s moves out of the %s's exit to %s.", GetTeamName(), JevAi_GetUnitName(blocker).c_str(),
+                JevAi_GetUnitName(parent).c_str(), JevAi_FormatPoint(best).c_str());
+
+        m_unit = blocker;
+        m_last_action = Action::MOVE;
+        m_move_start = Point(blocker->grid_x, blocker->grid_y);
+        blocker->move_to_grid_x = best.x;
+        blocker->move_to_grid_y = best.y;
+
+        UnitsManager_SetNewOrder(blocker, ORDER_MOVE, ORDER_STATE_INIT);
+
+        ++m_turn_exit_clears;
+        m_wait_start = SDL_GetTicks();
+        m_state = State::WAIT_FOR_UNIT;
+
+        return true;
+    }
+
+    return false;
+}
+
 bool JevAi::FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const {
     const int32_t size = JevAi_GetSize(unit_type);
     const Point position(builder->grid_x, builder->grid_y);
@@ -598,7 +738,7 @@ bool JevAi::FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) 
                 continue;
             }
 
-            if (!JevAi_IsSiteFree(m_team, unit_type, candidate)) {
+            if (!JevAi_IsSiteFree(m_team, unit_type, candidate) || !LeavesExits(unit_type, candidate)) {
                 continue;
             }
 
@@ -689,6 +829,10 @@ bool JevAi::ReleaseFinishedUnit() {
                         return true;
                     }
                 }
+            }
+
+            if (ClearExit(parent)) {
+                return true;
             }
 
             SDL_Log("Jev %s: no free cell around %s for %s.", GetTeamName(), JevAi_GetUnitName(parent).c_str(),
@@ -849,6 +993,11 @@ void JevAi::AddMoveOptions(UnitInfo* unit) {
             if (!JevAi_IsInsideMap(destination) ||
                 !Access_IsAccessible(unit->GetUnitType(), m_team, destination.x, destination.y,
                                      AccessModifier_SameClassBlocks)) {
+                continue;
+            }
+
+            // factory exits stay free for the units they release
+            if (IsFactoryExit(destination)) {
                 continue;
             }
 
@@ -1496,8 +1645,7 @@ json JevAi::GetState(UnitInfo* unit) const {
 
     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
          ++it) {
-        if ((*it).team == m_team && (*it).GetComplex() &&
-            (!is_factory || (*it).GetComplex() == local_complex)) {
+        if ((*it).team == m_team && (*it).GetComplex() && (!is_factory || (*it).GetComplex() == local_complex)) {
             Cargo materials;
             Cargo capacity;
 
@@ -1526,11 +1674,14 @@ json JevAi::GetState(UnitInfo* unit) const {
             {"raw_per_turn", Cargo_GetRawConsumptionRate(unit->GetUnitType(), 1)},
             {"power_needed", Cargo_GetPowerConsumptionRate(unit->GetUnitType())},
             {"workers_needed", Cargo_GetLifeConsumptionRate(unit->GetUnitType())},
-            {"can_run_next_turn_without_reallocating", balance.raw >= 0 && balance.fuel >= 0 &&
-                                                         balance.gold >= 0 && balance.power >= 0 && balance.life >= 0},
-            {"balance_after_generator_switching", {{"raw", balance.raw}, {"fuel", balance.fuel},
-                                                   {"gold", balance.gold}, {"power", balance.power},
-                                                   {"workers", balance.life}}}};
+            {"can_run_next_turn_without_reallocating",
+             balance.raw >= 0 && balance.fuel >= 0 && balance.gold >= 0 && balance.power >= 0 && balance.life >= 0},
+            {"balance_after_generator_switching",
+             {{"raw", balance.raw},
+              {"fuel", balance.fuel},
+              {"gold", balance.gold},
+              {"power", balance.power},
+              {"workers", balance.life}}}};
     }
 
     state["buildings"] = buildings;
@@ -1802,6 +1953,7 @@ void JevAi::BeginTurn() {
     m_turn_failed_moves = 0;
     m_turn_builds = 0;
     m_turn_attacks = 0;
+    m_turn_exit_clears = 0;
     m_state = State::SELECT;
 
     for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();

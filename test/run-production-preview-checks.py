@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run real-engine forecast or Jev attack checks with local assets and no model calls."""
+"""Run real-engine forecast, Jev attack or Jev exit checks with local assets and no model calls."""
 import argparse
 import json
 from pathlib import Path
@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build/windows-hotkeys')
     parser.add_argument('--assets-dir', type=Path, default=ROOT / 'runs/base')
-    parser.add_argument('--suite', choices=['production-preview', 'jev-attack'], default='production-preview')
+    parser.add_argument('--suite', choices=['production-preview', 'jev-attack', 'jev-exits'], default='production-preview')
     parser.add_argument('--attack-candidate', action='store_true',
                         help='test the saved attack-approach experiment in a generated source copy')
     args = parser.parse_args()
@@ -24,14 +24,17 @@ def main():
         parser.error('--run-only and --build-only are mutually exclusive')
     build = args.build_dir.resolve()
     output = ROOT / 'build' / args.suite
-    hook = 'RuntimeProductionPreviewChecks' if args.suite == 'production-preview' else 'RuntimeJevAttackChecks'
-    source_name = 'production_preview_runtime.cpp' if args.suite == 'production-preview' else 'jev_attack_runtime.cpp'
+    hook, source_name = {
+        'production-preview': ('RuntimeProductionPreviewChecks', 'production_preview_runtime.cpp'),
+        'jev-attack': ('RuntimeJevAttackChecks', 'jev_attack_runtime.cpp'),
+        'jev-exits': ('RuntimeJevExitsChecks', 'jev_exits_runtime.cpp'),
+    }[args.suite]
     output.mkdir(parents=True, exist_ok=True)
     if not args.run_only:
         subprocess.run(['cmake', '--build', str(build), '--parallel', '6'], check=True)
         entries = json.loads((build / 'compile_commands.json').read_text())
         sources = {'main.cpp': ROOT / 'test' / source_name}
-        if args.suite == 'jev-attack':
+        if args.suite in ('jev-attack', 'jev-exits'):
             # Expose controller internals only in this generated test build. The game header stays unchanged.
             header = (ROOT / 'src/jevai.hpp').read_text()
             (output / 'jevai.hpp').write_text(header.replace('class JevAi final : public NoneAi {',
