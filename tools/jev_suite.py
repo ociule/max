@@ -14,11 +14,13 @@ A key ending in > or < compares numbers ("danger>": 0), a dotted key looks insid
 true are scored apart; do not tune the wording on them.
 
 Per ask, the top choice is acceptable, forbidden, or neither; the margin is the best acceptable probability minus
-the best other one. The totals are compared with the previous run of the same templates file
-(runs/suite/last-<prompts>.json). A wording change is kept when acceptable picks rise and forbidden picks do not.
+the best other one. Totals are compared only with a previous run of the same templates filename, scenario
+contents, model and ask count (runs/suite/last-<prompts>-<scope>-<asks>-<model>.json). Reports include the template
+content hash. A wording change is kept when acceptable picks rise and forbidden picks do not.
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import sys
@@ -146,7 +148,12 @@ def main():
     scenarios = [s for s in scenarios if not args.only or args.only in s['id']]
     totals = {False: {'asks': 0, 'acceptable': 0, 'forbidden': 0, 'margin': 0.0},
               True: {'asks': 0, 'acceptable': 0, 'forbidden': 0, 'margin': 0.0}}
-    report = {'prompts': args.prompts, 'time': time.time(), 'scenarios': {}}
+    if args.asks < 1 or not scenarios:
+        parser.error('select at least one scenario and use --asks >= 1')
+    scope = hashlib.sha256(json.dumps(scenarios, sort_keys=True).encode()).hexdigest()[:12]
+    report = {'prompts': args.prompts, 'prompts_sha256': hashlib.sha256(Path(args.prompts).read_bytes()).hexdigest(),
+              'scope': scope, 'asks_per_scenario': args.asks, 'model': args.model,
+              'time': time.time(), 'scenarios': {}}
     tokens = 0
 
     for scenario in scenarios:
@@ -165,7 +172,7 @@ def main():
         print(f"{scenario['id']:40} {picks:30} margin {mean_margin:+.2f}{flag}")
 
     RESULTS.mkdir(parents=True, exist_ok=True)
-    last = RESULTS / f'last-{Path(args.prompts).stem}.json'
+    last = RESULTS / f'last-{Path(args.prompts).stem}-{scope}-{args.asks}-{args.model}.json'
     previous = json.loads(last.read_text()) if last.exists() else None
 
     for holdout, total in totals.items():
@@ -180,7 +187,7 @@ def main():
             print(line)
     print(f'{tokens} input tokens, ${tokens * 0.042 / 1e6:.4f}')
 
-    stamp = time.strftime('%Y%m%d-%H%M%S')
+    stamp = time.strftime('%Y%m%d-%H%M%S') + f'-{time.time_ns() % 1_000_000_000:09d}'
     (RESULTS / f'{stamp}-{Path(args.prompts).stem}.json').write_text(json.dumps(report, indent=1))
     last.write_text(json.dumps(report, indent=1))
 

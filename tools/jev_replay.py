@@ -17,12 +17,16 @@ be tried before building. The patch file is JSON, every field optional:
      "state": {"score": {...}},             merged into the state, top level keys replaced
      "criteria": {"b2": "new text", "m0": null, "b90": "a new option"}}   null removes an option
 --repeat N asks N times, to see how stable a near tie is.
+--prompts FILE re-renders structured options with those templates before applying the patch.
+--save FILE appends the exact requests and replies, so a prototype can be reproduced or mined into scenarios.
 """
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -59,6 +63,8 @@ def main():
     parser.add_argument('index', nargs='?', type=int, help='question index, from --list')
     parser.add_argument('--patch', help='JSON file with changes, see above')
     parser.add_argument('--instructions', metavar='NAME', help='instructions from this constant in src/jevai.cpp')
+    parser.add_argument('--prompts', help='render structured options with this Python templates file before patching')
+    parser.add_argument('--save', help='append the exact request and each response to this JSONL file')
     parser.add_argument('--repeat', type=int, default=1, help='ask this many times')
     parser.add_argument('--top', type=int, default=8, help='options to show')
     parser.add_argument('--model', default='jev-latest')
@@ -73,6 +79,11 @@ def main():
 
     entry = json.loads(Path(args.log).read_text().splitlines()[args.index])
     request = entry['request']
+    if args.prompts:
+        spec = importlib.util.spec_from_file_location('replay_prompts', args.prompts)
+        prompts = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(prompts)
+        request['questions'] = prompts.render_question(request)
     name, question = next(iter(request['questions'].items()))
 
     if args.patch:
@@ -100,6 +111,12 @@ def main():
 
     for attempt in range(args.repeat):
         reply = jev_bridge.ask_jev(key, args.model, request, 30)
+        if args.save:
+            target = Path(args.save)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open('a') as saved:
+                saved.write(json.dumps({'time': time.time(), 'source': f'{args.log}#{args.index}',
+                                        'request': request, 'reply': reply}) + '\n')
         ranked = sorted(reply['probabilities'].items(), key=lambda item: -item[1])
         print(f"-- {reply['model']}, {reply.get('usage', {}).get('input_tokens', '?')} input tokens"
               + (f', ask {attempt + 1}' if args.repeat > 1 else ''))
