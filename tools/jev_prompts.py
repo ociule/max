@@ -42,9 +42,11 @@ INSTRUCTIONS = {
         'commanded separately; you choose what this factory produces next, or nothing. A unit takes the given'
         ' number of turns and uses raw materials from your base every turn while it is being built. Rules, '
         'most important first: 1. If your team has only one Constructor, produce another one first when this '
-        'factory can, so that losing a builder does not lose the game. 2. Then produce combat units that fight'
-        ' ground units, a mix of strong and long range ones. 3. Produce nothing only when the base cannot '
-        'afford anything useful.'),
+        'factory can, so that losing a builder does not lose the game. 2. Then produce combat units that '
+        'fight ground units, a mix of strong and long range ones. 3. Raw materials that pile up are wasted, '
+        'and the base loses what it mines while its storage is full: then produce at a faster speed, which '
+        'draws more from the base every turn. 4. Produce nothing only when the base cannot afford anything '
+        'useful.'),
     'military': (
         'You command one military or support unit of your team in M.A.X., a turn-based strategy game on a map'
         ' of square cells. Construction is managed separately; your job is to find and destroy the enemy '
@@ -230,8 +232,14 @@ def describe_coverage(c):
 
 
 def render_produce(o):
-    return f"produce {article(o['type'])} {o['type']}: {describe_purpose(o['purpose'])} {o['turns']} turns, {o['cost']} raw materials, " \
-        f"{describe_stats(o['stats'])}, you have {o['have']}"
+    text = f"produce {article(o['type'])} {o['type']}: {describe_purpose(o['purpose'])} {o['turns']} turns, " \
+        f"{o['cost']} raw materials, {describe_stats(o['stats'])}, you have {o['have']}"
+    if 'speed' in o:
+        sp = o['speed']
+        text += f", produced at x{sp['rate']} speed: {sp['turns']} turn{'' if sp['turns'] == 1 else 's'} and " \
+            f"{sp['cost']} raw materials instead, {sp['per_turn']} per turn from the base, which mines " \
+            f"{sp['base_mines']} per turn"
+    return text
 
 
 def render_attack(o):
