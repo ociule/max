@@ -1864,6 +1864,73 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
          {{"action", "produce_nothing"}, {"base_raw", materials.raw}, {"base_raw_capacity", capacity.raw}}});
 }
 
+void JevAi::AddSurveyOptions(UnitInfo* surveyor) {
+    // new mines can only be joined to the base close to it: survey that ground, nearest first, as a human player
+    // sends a Surveyor to survey an area
+    constexpr int32_t mining_range = 14;
+    const uint16_t surveyed_bit = UnitsManager_TeamInfo[m_team].team_units->hash_team_id;
+    const auto is_surveyed = [surveyed_bit](int32_t x, int32_t y) {
+        return (ResourceManager_CargoMap[ResourceManager_MapSize.x * y + x] & surveyed_bit) != 0;
+    };
+    const Point position(surveyor->grid_x, surveyor->grid_y);
+    Point base;
+    Point best;
+    int32_t best_distance = INT32_MAX;
+    int32_t remaining = 0;
+
+    if (surveyor->speed == 0 || !GetBasePosition(base)) {
+        return;
+    }
+
+    for (int32_t x = base.x - mining_range; x <= base.x + mining_range; ++x) {
+        for (int32_t y = base.y - mining_range; y <= base.y + mining_range; ++y) {
+            if (!JevAi_IsInsideMap(Point(x, y)) || is_surveyed(x, y) ||
+                Access_GetSurfaceType(x, y) != SURFACE_TYPE_LAND) {
+                continue;
+            }
+
+            ++remaining;
+
+            const int32_t distance = JevAi_GetDistance(position, Point(x, y));
+
+            if (distance < best_distance &&
+                Access_IsAccessible(SURVEYOR, m_team, x, y, AccessModifier_SameClassBlocks)) {
+                best = Point(x, y);
+                best_distance = distance;
+            }
+        }
+    }
+
+    if (best_distance == INT32_MAX) {
+        return;
+    }
+
+    const int32_t danger = GetDanger(surveyor, best, nullptr);
+
+    if (danger > 0) {
+        return;
+    }
+
+    std::string facts = "survey the ground around your base: go to " + JevAi_FormatPoint(best) + ", " +
+                        std::to_string(best_distance) + " cells away, " + std::to_string(remaining) +
+                        " land cells within " + std::to_string(mining_range) +
+                        " cells of your base are not surveyed yet; only deposits that close can be mined and joined "
+                        "to the base";
+
+    m_options.push_back({"s" + std::to_string(m_options.size()),
+                         Action::MOVE,
+                         best,
+                         INVALID_ID,
+                         nullptr,
+                         facts,
+                         remaining > 0 ? 30 : 0,
+                         {{"action", "survey_base"},
+                          {"to", JevAi_PointData(best)},
+                          {"distance", best_distance},
+                          {"unsurveyed_near_base", remaining},
+                          {"mining_range", mining_range}}});
+}
+
 void JevAi::AddRefillOptions(UnitInfo* builder) {
     const int32_t capacity = builder->GetBaseValues()->GetAttribute(ATTRIB_STORAGE);
 
@@ -2770,6 +2837,10 @@ bool JevAi::CheckEndTurn() {
             if (JevAi_IsBuilder(m_unit->GetUnitType())) {
                 AddBuildOptions(&*m_unit);
                 AddRefillOptions(&*m_unit);
+            }
+
+            if (m_unit->GetUnitType() == SURVEYOR) {
+                AddSurveyOptions(&*m_unit);
             }
 
             m_options.push_back({"stay",

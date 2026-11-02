@@ -243,7 +243,14 @@ def render_produce_nothing(o):
     return text
 
 
+def render_survey_base(o):
+    return f"survey the ground around your base: go to {cell(o['to'])}, {o['distance']} cells away, " \
+        f"{o['unsurveyed_near_base']} land cells within {o['mining_range']} cells of your base are not surveyed yet; " \
+        'only deposits that close can be mined and joined to the base'
+
+
 RENDERERS = {
+    'survey_base': render_survey_base,
     'move': render_move,
     'build': render_build,
     'produce': render_produce,
