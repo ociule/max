@@ -24,12 +24,13 @@ INSTRUCTIONS = {
         'cells. Military units are commanded separately; your job is the economy and production that feed '
         'them. The game ends at a turn limit: the team with the most points wins, a tie goes to the team with'
         ' the most valuable units and buildings, and a team with no Constructor and no factory is eliminated.'
-        ' Each working Eco-sphere scores 1 point every turn, so Eco-spheres built early score the most. '
-        'Choose what this unit does now. Rules, most important first: 1. If your team has no factory, '
-        'building one comes first; the Heavy Vehicle Plant is the only factory that makes tanks and other '
-        'strong combat units, and new Constructors. 2. A building that needs power does not work while the '
-        'base has no spare power; Engineers build Power Generators quickly, so start the factory and let an '
-        'Engineer add power. 3. Keep builders out of danger. If your team has only one Constructor and no '
+        ' Each working Eco-sphere scores 1 point every turn, so Eco-spheres built early score the most. An '
+        'Eco-sphere holds the points it scored and they are lost when it is destroyed, so Eco-spheres must be'
+        ' defended. Choose what this unit does now. Rules, most important first: 1. If your team has no '
+        'factory, building one comes first; the Heavy Vehicle Plant is the only factory that makes tanks and '
+        'other strong combat units, and new Constructors. 2. A building that needs power does not work while '
+        'the base has no spare power; Engineers build Power Generators quickly, so start the factory and let '
+        'an Engineer add power. 3. Keep builders out of danger. If your team has only one Constructor and no '
         'factory, losing it loses the game. 4. Put mining stations on surveyed resources to raise income; '
         'surveyors find those resources near the base. 5. Builders use the raw materials they carry; refill '
         'at the base when they carry too little. 6. Once a factory is started, build a Habitat for workers '
@@ -49,10 +50,10 @@ INSTRUCTIONS = {
         "while keeping your base and your builders safe. Choose this unit's action now. Rules, most important"
         ' first: 1. Attack enemies you can damage, above all ones that can be destroyed this turn or cannot '
         'shoot back. 2. If enemies are near your base, your Eco-spheres or your builders, move between them '
-        'or attack them; the enemy goes for the team with the most points. 3. Do not move where the danger is'
-        " higher than this unit's hits unless it can destroy the enemy there. 4. Otherwise explore to find "
-        'the enemy: fast units go far, slow units stay within a few cells of the base until enemies are '
-        'found.'),
+        'or attack them; the enemy goes for the team with the most points, and each Eco-sphere it destroys '
+        "takes away the points it holds. 3. Do not move where the danger is higher than this unit's hits "
+        'unless it can destroy the enemy there. 4. Otherwise explore to find the enemy: fast units go far, '
+        'slow units stay within a few cells of the base until enemies are found.'),
 }
 
 # What a unit type is for, by engine name. Factories are described by what they make.
@@ -66,7 +67,8 @@ ROLES = {
     'GOLDSM': 'extra storage for gold;',
     'HABITAT': 'dwelling, gives workers to training halls, research centres and eco-spheres;',
     'RESEARCH': 'research centre, slowly upgrades units, needs workers;',
-    'GREENHSE': 'Eco-sphere, scores 1 point every turn while it works, points decide the game;',
+    'GREENHSE': 'Eco-sphere, scores 1 point every turn while it works and holds the points it scored: if it is '
+                'destroyed, they are lost; points decide the game;',
     'DEPOT': 'repairs and reloads land units next to it;',
     'HANGAR': 'repairs and reloads aircraft;',
     'DOCK': 'repairs and reloads ships;',
