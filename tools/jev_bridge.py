@@ -18,6 +18,7 @@ Usage: python3 tools/jev_bridge.py [--mock] [--port 47811] [--log jev-log.jsonl]
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import socket
@@ -83,11 +84,29 @@ def ask_mock(request):
 class Bridge:
     def __init__(self, args):
         self.args = args
+        self.prompts = jev_prompts
+        if args.prompts:
+            spec = importlib.util.spec_from_file_location('match_prompts', args.prompts)
+            self.prompts = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(self.prompts)
         self.key = None if args.mock else load_key()
         if not args.mock and not self.key:
             raise SystemExit('No TYPESAFE_API_KEY in the environment or in .env. Use --mock to run without Jev.')
         self.log_lock = threading.Lock()
+        self.budget_lock = threading.Lock()
+        self.calls = 0
+        self.input_tokens = 0
         self.log = open(args.log, 'a', encoding='utf-8')
+
+    def call_model(self, request):
+        # Serialize budget accounting across connections so concurrent teams cannot bypass it.
+        with self.budget_lock:
+            if self.calls >= self.args.max_calls or self.input_tokens >= self.args.max_input_tokens:
+                return {'error': 'Jev run budget exhausted', 'budget_exhausted': True}
+            self.calls += 1
+            reply = ask_jev(self.key, self.args.model, request, self.args.timeout)
+            self.input_tokens += (reply.get('usage') or {}).get('input_tokens', 0)
+            return reply
 
     def answer(self, request):
         start = time.monotonic()
@@ -95,14 +114,13 @@ class Bridge:
         if 'options' in request and not self.args.game_wording:
             request['game_questions'] = request['questions']
             try:
-                request['questions'] = jev_prompts.render_question(request)
+                request['questions'] = self.prompts.render_question(request)
             except (KeyError, TypeError) as error:  # a template bug must not stop the game
                 request['questions'] = request['game_questions']
                 request['template_error'] = f'{type(error).__name__}: {error}'
 
         try:
-            reply = ask_mock(request) if self.args.mock else ask_jev(self.key, self.args.model, request,
-                                                                       self.args.timeout)
+            reply = ask_mock(request) if self.args.mock else self.call_model(request)
         except urllib.error.HTTPError as error:
             reply = {'error': f'HTTP {error.code}: {error.read().decode(errors="replace")[:500]}'}
         except Exception as error:  # the game must always get an answer
@@ -153,6 +171,10 @@ def main():
     parser.add_argument('--timeout', type=float, default=10.0, help='seconds to wait for Jev')
     parser.add_argument('--log', default='jev-log.jsonl', help='JSON lines file of questions and answers')
     parser.add_argument('--game-wording', action='store_true', help="send the game's texts, not the templates")
+    parser.add_argument('--prompts', help='Python prompt templates snapshot (default: tools/jev_prompts.py)')
+    parser.add_argument('--max-calls', type=int, default=5000, help='maximum paid requests per bridge run')
+    parser.add_argument('--max-input-tokens', type=int, default=5_000_000,
+                        help='stop new calls after this many billed input tokens (one call may cross it)')
     Bridge(parser.parse_args()).run()
 
 

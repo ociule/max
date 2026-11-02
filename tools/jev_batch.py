@@ -12,11 +12,11 @@ points, units and buildings lost, questions asked and their input tokens.
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import re
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,19 +25,22 @@ TEAMS = ['red', 'green', 'blue', 'gray']
 FACTORIES = ('Heavy Vehicle Plant', 'Light Vehicle Plant', 'Air Units Plant', 'Shipyard', 'Training Hall')
 
 
-def run_game(label, world, seed, turns, controllers, mock):
+def run_game(label, world, seed, turns, controllers, mock, model, max_calls, max_input_tokens):
     name = f'{label}-w{world}-s{seed}'
-    command = [sys.executable, str(ROOT / 'tools' / 'jev_match.py'), '--name', name, '--force'] + \
+    command = [sys.executable, str(ROOT / 'tools' / 'jev_match.py'), '--name', name, '--model', model,
+               '--max-calls', str(max_calls), '--max-input-tokens', str(max_input_tokens)] + \
               (['--mock'] if mock else []) + \
               ['--', '--controllers', controllers, '--world', str(world), '--seed', str(seed), '--turns', str(turns)]
-    subprocess.run(command, check=False)
-    return name
+    return subprocess.run(command, check=False).returncode
 
 
 def summarize_game(name, jev_team):
     run = RUNS / name
     log = (run / 'game.log').read_text(errors='replace') if (run / 'game.log').exists() else ''
-    result = {'name': name, 'turns_played': 0}
+    info_path = run / 'run.json'
+    info = json.loads(info_path.read_text()) if info_path.exists() else {}
+    result = {'name': name, 'turns_played': 0,
+              'status': 'complete' if info.get('result') and info.get('exit_code') == 0 else 'incomplete'}
     team_line = re.compile(r'(\w+) units (\d+) \(\d+ with classic tasks\) buildings (\d+) points (\d+) worth (\d+)')
 
     for line in log.splitlines():
@@ -77,13 +80,20 @@ def summarize_game(name, jev_team):
 
     questions = 0
     tokens = 0
+    errors = 0
+    budget_exhausted = False
     if (run / 'questions.jsonl').exists():
         for line in (run / 'questions.jsonl').read_text().splitlines():
             entry = json.loads(line)
             if entry['request'].get('team') == jev_team:
                 questions += 1
                 tokens += (entry['reply'].get('usage') or {}).get('input_tokens', 0)
+                errors += bool(entry['reply'].get('error') or entry['request'].get('template_error'))
+                budget_exhausted |= entry['reply'].get('budget_exhausted', False)
     result['questions'], result['input_tokens'] = questions, tokens
+    result['errors'], result['budget_exhausted'] = errors, budget_exhausted
+    if errors:
+        result['status'] = 'budget exhausted' if budget_exhausted else 'errors'
     return result
 
 
@@ -92,13 +102,13 @@ def table(results):
         value = row.get(key)
         return '-' if value is None else str(value)
 
-    header = ('| game | turns | rank | points | enemy points | worth | enemy worth | units / buildings | '
+    header = ('| game | status | turns | rank | points | enemy points | worth | enemy worth | units / buildings | '
               'enemy units / buildings | first factory | first points | lost | enemy lost | questions | cost |')
     lines = [header, '|' + '---|' * (header.count('|') - 1)]
     for row in results:
         cost = row.get('input_tokens', 0) * 0.042 / 1e6
         lines.append('| ' + ' | '.join([
-            row['name'], cell(row, 'turns_played'), cell(row, 'rank'), cell(row, 'points'), cell(row, 'enemy_points'),
+            row['name'], row.get('status', '?'), cell(row, 'turns_played'), cell(row, 'rank'), cell(row, 'points'), cell(row, 'enemy_points'),
             cell(row, 'worth'), cell(row, 'enemy_worth'), f"{cell(row, 'units')} / {cell(row, 'buildings')}",
             f"{cell(row, 'enemy_units')} / {cell(row, 'enemy_buildings')}", cell(row, 'first_factory_turn'),
             cell(row, 'first_points_turn'), cell(row, 'lost'), cell(row, 'enemy_lost'), cell(row, 'questions'),
@@ -113,6 +123,9 @@ def main():
     parser.add_argument('--turns', type=int, default=100)
     parser.add_argument('--controllers', default='jev,classic')
     parser.add_argument('--mock', action='store_true', help='mock Jev answers, to test the batch itself')
+    parser.add_argument('--model', default='jev-latest')
+    parser.add_argument('--max-calls', type=int, default=5000, help='maximum paid requests per game')
+    parser.add_argument('--max-input-tokens', type=int, default=5_000_000, help='input-token threshold per game')
     parser.add_argument('--summarize', metavar='LABEL', help='only print the table of an earlier batch')
     args = parser.parse_args()
 
@@ -126,18 +139,23 @@ def main():
     names = [f'{label}-w{world}-s{seed}' for world, seed in games]
 
     if not args.summarize:
-        threads = [threading.Thread(target=run_game, args=(label, world, seed, args.turns, args.controllers, args.mock))
-                   for world, seed in games]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
+        if len(set(names)) != len(names):
+            parser.error('duplicate world:seed pairs would share a run folder')
+        if any((RUNS / name).exists() for name in names):
+            parser.error('a run folder already exists; use a new label or --summarize')
+        with ThreadPoolExecutor(max_workers=len(games)) as pool:
+            outcomes = list(pool.map(lambda game: run_game(label, *game, args.turns, args.controllers, args.mock,
+                                                         args.model, args.max_calls, args.max_input_tokens), games))
+    else:
+        outcomes = []
 
     results = [summarize_game(name, jev_team) for name in names]
     text = table(results)
     (RUNS / f'{label}.md').write_text(text + '\n')
     (RUNS / f'{label}.json').write_text(json.dumps(results, indent=2))
     print(text)
+    if any(outcomes) or any(row['status'] != 'complete' for row in results):
+        raise SystemExit('Batch has failed, incomplete or invalid games; see run and bridge logs.')
 
 
 if __name__ == '__main__':

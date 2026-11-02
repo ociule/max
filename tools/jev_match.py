@@ -14,6 +14,7 @@ run.json (arguments, exe hash, git commit, start and end, the game over line). r
 
 import argparse
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -22,6 +23,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,7 +33,7 @@ SLOTS = RUNS / 'slots'
 DEFAULT_EXE = ROOT / 'build' / 'windows-hotkeys' / 'max-port.exe'
 
 # files the game writes or that each slot needs its own copy of
-OWN_FILES = {'max-port.exe', 'settings.json', 'stdout.txt', 'console.log'}
+OWN_FILES = {'max-port.exe', 'settings.json', 'stdout.txt', 'console.log', '.busy', '.lock'}
 
 
 def free_port():
@@ -41,39 +43,62 @@ def free_port():
 
 
 def process_alive(pid):
+    if pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
+    except PermissionError:
+        return True
     except OSError:
         return False
     return True
 
 
+@contextmanager
 def take_slot():
-    """The first slot no live process holds, created from runs/base when missing."""
+    """Hold an OS lock for the whole match, including setup and log collection.
+
+    Keep the lock file permanently: unlinking it would let another process lock
+    a different inode. .busy remains PID metadata for compatibility with older runners.
+    """
     if not BASE.is_dir():
         raise SystemExit(f'{BASE} is missing: copy a working game folder there (assets, resources, settings.json).')
 
     for number in range(1, 17):
         slot = SLOTS / f'game{number}'
-        lock = slot / '.busy'
+        slot.mkdir(parents=True, exist_ok=True)
+        lease = (slot / '.lock').open('a')
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lease.close()
+            continue
 
-        if lock.exists():
+        busy = slot / '.busy'
+        try:
+            # Respect matches started by the old runner, which did not use flock.
             try:
-                if process_alive(int(lock.read_text())):
+                if process_alive(int(busy.read_text())):
                     continue
-            except ValueError:
+            except (FileNotFoundError, ValueError):
                 pass
 
-        if not slot.exists():
-            slot.mkdir(parents=True)
             for entry in BASE.iterdir():
-                if entry.name not in OWN_FILES:
+                target = slot / entry.name
+                if entry.name not in OWN_FILES and not target.exists() and not target.is_symlink():
                     (slot / entry.name).symlink_to(entry)
-            if (BASE / 'settings.json').exists():
+            if (BASE / 'settings.json').exists() and not (slot / 'settings.json').exists():
                 shutil.copy2(BASE / 'settings.json', slot / 'settings.json')
 
-        lock.write_text(str(os.getpid()))
-        return slot
+            busy.write_text(str(os.getpid()))
+            try:
+                yield slot
+            finally:
+                if busy.exists() and busy.read_text() == str(os.getpid()):
+                    busy.unlink()
+            return
+        finally:
+            lease.close()
 
     raise SystemExit('No free game slot.')
 
@@ -93,12 +118,27 @@ def git_commit():
     return git('rev-parse', '--short', 'HEAD') + ('-dirty' if git('status', '--porcelain', '--untracked-files=no') else '')
 
 
+def stop_process(process):
+    if process is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--name', help='run name, the folder in runs/ (default: the date and time)')
     parser.add_argument('--exe', default=str(DEFAULT_EXE), help='the game to run')
     parser.add_argument('--mock', action='store_true', help='answer with the bridge mock instead of Jev')
     parser.add_argument('--force', action='store_true', help='replace an existing run folder')
+    parser.add_argument('--timeout', type=float, default=3600, help='maximum game duration in seconds')
+    parser.add_argument('--model', default='jev-latest', help='Jev model version (pin for comparisons)')
+    parser.add_argument('--max-calls', type=int, default=5000, help='maximum paid requests')
+    parser.add_argument('--max-input-tokens', type=int, default=5_000_000,
+                        help='stop new requests after this many billed input tokens')
     parser.add_argument('game_args', nargs=argparse.REMAINDER, help='-- then the game arguments')
     args = parser.parse_args()
 
@@ -112,33 +152,41 @@ def main():
         shutil.rmtree(run)
 
     run.mkdir(parents=True)
-    slot = take_slot()
-    port = free_port()
-
-    try:
+    with take_slot() as slot:
+        port = free_port()
         shutil.copy2(args.exe, slot / 'max-port.exe')
+        shutil.copy2(ROOT / 'tools' / 'jev_prompts.py', run / 'prompts.py')
         (slot / 'stdout.txt').unlink(missing_ok=True)
 
         info = {'name': name, 'game_args': game_args, 'exe': args.exe, 'exe_sha256': file_hash(args.exe),
                 'git_commit': git_commit(), 'slot': slot.name, 'port': port, 'mock': args.mock,
-                'start': time.time()}
+                'start': time.time(), 'prompts_sha256': file_hash(run / 'prompts.py'), 'model': args.model,
+                'max_calls': args.max_calls, 'max_input_tokens': args.max_input_tokens}
         (run / 'run.json').write_text(json.dumps(info, indent=2))
 
         bridge_command = [sys.executable, str(ROOT / 'tools' / 'jev_bridge.py'), '--port', str(port), '--log',
-                          str(run / 'questions.jsonl')] + (['--mock'] if args.mock else [])
+                          str(run / 'questions.jsonl'), '--prompts', str(run / 'prompts.py'), '--model', args.model,
+                          '--max-calls', str(args.max_calls), '--max-input-tokens', str(args.max_input_tokens)] + \
+                         (['--mock'] if args.mock else [])
 
+        game = bridge = None
+        failure = None
         with open(run / 'bridge.log', 'w') as bridge_log:
-            bridge = subprocess.Popen(bridge_command, stdout=bridge_log, stderr=subprocess.STDOUT)
-            time.sleep(1)
-
-            print(f'{name}: {" ".join(game_args)} in {slot.name}, bridge port {port}', flush=True)
-
-            environment = dict(os.environ, MAX_JEV_BRIDGE_PORT=str(port))
-            game = subprocess.run(['wine', 'max-port.exe', *game_args, '--hidden'], cwd=slot, env=environment,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-
-            bridge.terminate()
-            bridge.wait(timeout=10)
+            try:
+                bridge = subprocess.Popen(bridge_command, stdout=bridge_log, stderr=subprocess.STDOUT)
+                time.sleep(1)
+                if bridge.poll() is not None:
+                    raise RuntimeError('Bridge did not start; see bridge.log')
+                print(f'{name}: {" ".join(game_args)} in {slot.name}, bridge port {port}', flush=True)
+                environment = dict(os.environ, MAX_JEV_BRIDGE_PORT=str(port))
+                game = subprocess.Popen(['wine', 'max-port.exe', *game_args, '--hidden'], cwd=slot, env=environment,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                game.wait(timeout=args.timeout)
+            except (Exception, KeyboardInterrupt) as error:
+                failure = f'{type(error).__name__}: {error}'
+            finally:
+                stop_process(game)
+                stop_process(bridge)
 
         if (slot / 'stdout.txt').exists():
             shutil.copy2(slot / 'stdout.txt', run / 'game.log')
@@ -149,14 +197,16 @@ def main():
                 if 'Game over' in line:
                     result = line.split('Command line: ', 1)[-1]
 
-        info.update({'end': time.time(), 'exit_code': game.returncode, 'result': result})
+        exit_code = game.returncode if game else None
+        info.update({'end': time.time(), 'exit_code': exit_code, 'result': result})
+        if failure:
+            info['error'] = failure
         (run / 'run.json').write_text(json.dumps(info, indent=2))
 
         minutes = (info['end'] - info['start']) / 60
-        print(f'{name}: {minutes:.1f} min, {result or "no game over line, exit code " + str(game.returncode)}')
-
-    finally:
-        (slot / '.busy').unlink(missing_ok=True)
+        print(f'{name}: {minutes:.1f} min, {result or failure or "no game over line, exit code " + str(exit_code)}')
+        if failure or exit_code != 0 or not result:
+            raise SystemExit(1)
 
 
 if __name__ == '__main__':
