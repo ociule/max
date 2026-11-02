@@ -37,6 +37,7 @@
 #include "resource_manager.hpp"
 #include "survey.hpp"
 #include "task.hpp"
+#include "teamunits.hpp"
 #include "units_manager.hpp"
 
 using json = nlohmann::ordered_json;
@@ -691,7 +692,10 @@ bool JevAi::ClearExit(UnitInfo* parent) {
     for (const Point cell : JevAi_GetOutline(Point(parent->grid_x, parent->grid_y), size)) {
         UnitInfo* blocker = Access_GetTeamUnit(cell.x, cell.y, m_team, MOBILE_LAND_UNIT);
 
-        if (!blocker || blocker == parent || !Task_IsReadyToTakeOrders(blocker) || blocker->speed == 0) {
+        // each unit is moved aside once per turn: a move that failed would only fail again
+        if (!blocker || blocker == parent || !Task_IsReadyToTakeOrders(blocker) || blocker->speed == 0 ||
+            std::find(m_turn_cleared_units.begin(), m_turn_cleared_units.end(), blocker->unit_id) !=
+                m_turn_cleared_units.end()) {
             continue;
         }
 
@@ -728,6 +732,7 @@ bool JevAi::ClearExit(UnitInfo* parent) {
         UnitsManager_SetNewOrder(blocker, ORDER_MOVE, ORDER_STATE_INIT);
 
         ++m_turn_exit_clears;
+        m_turn_cleared_units.push_back(blocker->unit_id);
         m_wait_start = SDL_GetTicks();
         m_state = State::WAIT_FOR_UNIT;
 
@@ -896,6 +901,59 @@ bool JevAi::GetApproach(std::vector<Point>& cells, Point& origin) const {
     }
 
     return !cells.empty();
+}
+
+std::vector<Point> JevAi::FindMineSites() const {
+    // the richest surveyed sites around the base that join it: a mine away from the base has no power
+    constexpr int32_t search_radius = 14;
+    constexpr int32_t maximum_sites = 3;
+    constexpr int32_t minimum_spacing = 3;
+    Point base;
+    std::vector<std::pair<int32_t, Point>> candidates;
+
+    if (!GetBasePosition(base)) {
+        return {};
+    }
+
+    for (int32_t x = base.x - search_radius; x <= base.x + search_radius; ++x) {
+        for (int32_t y = base.y - search_radius; y <= base.y + search_radius; ++y) {
+            const Point site(x, y);
+            int16_t raw;
+            int16_t gold;
+            int16_t fuel;
+
+            if (!JevAi_IsInsideMap(site) || !JevAi_IsInsideMap(Point(x + 1, y + 1))) {
+                continue;
+            }
+
+            Survey_GetTotalResourcesInArea(x, y, 1, &raw, &gold, &fuel, false, m_team);
+
+            if (raw + fuel + gold == 0 || !JevAi_IsSiteFree(m_team, MININGST, site) || !TouchesBase(MININGST, site) ||
+                !LeavesExits(MININGST, site)) {
+                continue;
+            }
+
+            candidates.push_back({raw + fuel + gold, site});
+        }
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    std::vector<Point> sites;
+
+    for (const auto& candidate : candidates) {
+        if (std::all_of(sites.begin(), sites.end(), [&candidate](Point chosen) {
+                return JevAi_GetDistance(chosen, candidate.second) >= minimum_spacing;
+            })) {
+            sites.push_back(candidate.second);
+        }
+
+        if (static_cast<int32_t>(sites.size()) == maximum_sites) {
+            break;
+        }
+    }
+
+    return sites;
 }
 
 std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_type) const {
@@ -1305,12 +1363,25 @@ void JevAi::AddMoveOptions(UnitInfo* unit) {
                 int16_t gold;
                 int16_t fuel;
 
-                Survey_GetTotalResourcesInArea(destination.x - 1, destination.y - 1, 2, &raw, &gold, &fuel, true,
+                // only what the team has surveyed, and how much there is still unsurveyed
+                Survey_GetTotalResourcesInArea(destination.x - 1, destination.y - 1, 2, &raw, &gold, &fuel, false,
                                                m_team);
 
-                facts += ", resources there raw " + std::to_string(raw) + " fuel " + std::to_string(fuel) + " gold " +
-                         std::to_string(gold);
+                int32_t unsurveyed = 0;
+
+                for (int32_t x = destination.x - 1; x <= destination.x + 1; ++x) {
+                    for (int32_t y = destination.y - 1; y <= destination.y + 1; ++y) {
+                        unsurveyed += JevAi_IsInsideMap(Point(x, y)) &&
+                                      !(ResourceManager_CargoMap[ResourceManager_MapSize.x * y + x] &
+                                        UnitsManager_TeamInfo[m_team].team_units->hash_team_id);
+                    }
+                }
+
+                facts += ", surveyed resources there raw " + std::to_string(raw) + " fuel " + std::to_string(fuel) +
+                         " gold " + std::to_string(gold) + ", " + std::to_string(unsurveyed) +
+                         " of 9 cells not surveyed";
                 data["resources"] = {{"raw", raw}, {"fuel", fuel}, {"gold", gold}};
+                data["unsurveyed_cells"] = unsurveyed;
             }
 
             m_options.push_back({"m" + std::to_string(m_options.size()), Action::MOVE, destination, INVALID_ID, nullptr,
@@ -1436,6 +1507,9 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
         if (unit_type == GUNTURRT) {
             sites = FindDefenseSites(builder, unit_type);
 
+        } else if (unit_type == MININGST) {
+            sites = FindMineSites();
+
         } else if (FindBuildSite(builder, unit_type, found_site)) {
             sites.push_back(found_site);
         }
@@ -1478,6 +1552,29 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 facts += ", surveyed resources under it raw " + std::to_string(raw) + " fuel " + std::to_string(fuel) +
                          " gold " + std::to_string(gold);
                 data["resources"] = {{"raw", raw}, {"fuel", fuel}, {"gold", gold}};
+
+                // what the base mines now, to compare with
+                Cargo mining;
+                Cargo mining_capacity;
+                int32_t mines = 0;
+
+                for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End();
+                     it != it_end; ++it) {
+                    if ((*it).team == m_team && (*it).hits > 0 && (*it).GetUnitType() == MININGST) {
+                        ++mines;
+
+                        if ((*it).GetComplex()) {
+                            (*it).GetComplex()->GetCargoMining(mining, mining_capacity);
+                        }
+                    }
+                }
+
+                facts += ", joins your base, a station mines up to 16 per turn in all; your base mines raw " +
+                         std::to_string(mining.raw) + " fuel " + std::to_string(mining.fuel) + " gold " +
+                         std::to_string(mining.gold) + " per turn from " + std::to_string(mines) + " stations";
+                data["joins_base"] = true;
+                data["base_mining"] = {
+                    {"raw", mining.raw}, {"fuel", mining.fuel}, {"gold", mining.gold}, {"stations", mines}};
                 score = (raw + fuel + gold) > 0 ? 40 + raw + fuel + gold : -10;
 
             } else {
@@ -2073,8 +2170,7 @@ bool JevAi::ContinueToSite() {
 
     m_sites.erase(entry);
 
-    if (!JevAi_IsSiteFree(m_team, site.unit_type, site.site) ||
-        GameManager_TurnCounter - site.turn > JevAi_SiteWalkTurns) {
+    if (!JevAi_IsSiteFree(m_team, site.unit_type, site.site) || GameManager_TurnCounter - site.turn > site.walk_turns) {
         SDL_Log("Jev %s: %s gives up the %s site at %s.", GetTeamName(), JevAi_GetUnitName(&*m_unit).c_str(),
                 JevAi_GetTypeName(site.unit_type).c_str(), JevAi_FormatPoint(site.site).c_str());
 
@@ -2157,7 +2253,13 @@ void JevAi::Apply(const std::string& answer) {
                 FinishUnit();
 
             } else {
-                m_sites.push_back({m_unit->unit_id, option->unit_type, option->destination, GameManager_TurnCounter});
+                const int32_t walk_turns =
+                    JevAi_GetDistance(Point(m_unit->grid_x, m_unit->grid_y), option->destination) /
+                        std::max<int32_t>(1, m_unit->GetBaseValues()->GetAttribute(ATTRIB_SPEED)) +
+                    JevAi_SiteWalkTurns;
+
+                m_sites.push_back(
+                    {m_unit->unit_id, option->unit_type, option->destination, GameManager_TurnCounter, walk_turns});
 
                 WalkToSite(option->unit_type, option->destination);
             }
@@ -2250,6 +2352,7 @@ void JevAi::BeginTurn() {
     m_turn_builds = 0;
     m_turn_attacks = 0;
     m_turn_exit_clears = 0;
+    m_turn_cleared_units.clear();
     m_state = State::SELECT;
 
     for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();

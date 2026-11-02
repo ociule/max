@@ -65,6 +65,7 @@ class JevAi final : public NoneAi {
         ResourceID unit_type;
         Point site;
         int32_t turn;
+        int32_t walk_turns;
     };
 
     /// Where the team saw an enemy: buildings are kept, units for a few turns.
@@ -96,6 +97,7 @@ class JevAi final : public NoneAi {
     int32_t m_turn_builds{0};
     int32_t m_turn_attacks{0};
     int32_t m_turn_exit_clears{0};
+    std::vector<uint16_t> m_turn_cleared_units;
     Action m_last_action{Action::STAY};
     int32_t m_units_lost{0};
     int32_t m_explored_cells{0};
@@ -115,6 +117,7 @@ class JevAi final : public NoneAi {
     bool FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const;
     bool LeavesExits(ResourceID unit_type, Point site) const;
     std::vector<Point> FindDefenseSites(UnitInfo* builder, ResourceID unit_type) const;
+    std::vector<Point> FindMineSites() const;
     void RememberEnemies();
     bool GetApproach(std::vector<Point>& cells, Point& origin) const;
     nlohmann::ordered_json GetDefenseCoverage(ResourceID unit_type, Point site) const;
