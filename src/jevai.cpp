@@ -1331,9 +1331,46 @@ void JevAi::BalanceEconomy() {
             }
         }
 
-        // an Eco-sphere only scores while it works
+        // a Mining Station is the base's income and its only fuel: it gets power before the rest, as a human player
+        // would switch it on; a fuel mine may take the power of an Eco-sphere, since its fuel runs more generators
         int32_t power_left = complex->power;
         int32_t workers_left = complex->workers;
+
+        for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+             ++it) {
+            UnitInfo& mine = *it;
+
+            if (mine.GetComplex() != complex || mine.GetUnitType() != MININGST || mine.hits == 0 ||
+                (mine.GetOrder() != ORDER_POWER_OFF && mine.GetOrder() != ORDER_AWAIT)) {
+                continue;
+            }
+
+            if (power_left < Cargo_GetPowerConsumptionRate(MININGST) && mine.fuel_mining_max > 0) {
+                for (auto it2 = UnitsManager_StationaryUnits.Begin(), it2_end = UnitsManager_StationaryUnits.End();
+                     it2 != it2_end; ++it2) {
+                    if ((*it2).GetComplex() == complex && (*it2).GetUnitType() == GREENHSE &&
+                        (*it2).GetOrder() == ORDER_POWER_ON) {
+                        SDL_Log("Jev %s: the Eco-sphere at %s gives its power to the Mining Station at %s.",
+                                GetTeamName(), JevAi_FormatPoint(Point((*it2).grid_x, (*it2).grid_y)).c_str(),
+                                JevAi_FormatPoint(Point(mine.grid_x, mine.grid_y)).c_str());
+
+                        UnitsManager_SetNewOrder(it2->Get(), ORDER_POWER_OFF, ORDER_STATE_INIT);
+
+                        power_left += Cargo_GetPowerConsumptionRate(GREENHSE);
+                        workers_left += Cargo_GetLifeConsumptionRate(GREENHSE);
+                        break;
+                    }
+                }
+            }
+
+            if (power_left >= Cargo_GetPowerConsumptionRate(MININGST)) {
+                UnitsManager_SetNewOrder(it->Get(), ORDER_POWER_ON, ORDER_STATE_INIT);
+
+                power_left -= Cargo_GetPowerConsumptionRate(MININGST);
+            }
+        }
+
+        // an Eco-sphere only scores while it works
 
         for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
              ++it) {
@@ -1511,6 +1548,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
     int32_t workers_needed = 0;
     int32_t workers_given = 0;
     int32_t factories = 0;
+    int32_t idle_mine_fuel = 0;
     Cargo fuel_mining;
     Cargo fuel_mining_capacity;
 
@@ -1532,6 +1570,11 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
                 if (!fuel_mining_capacity.fuel && (*it).GetComplex()) {
                     (*it).GetComplex()->GetCargoMining(fuel_mining, fuel_mining_capacity);
+                }
+
+                // a switched off mine mines fuel again once it has power
+                if (power_unit == MININGST && (*it).GetOrder() != ORDER_POWER_ON) {
+                    idle_mine_fuel += (*it).fuel_mining_max;
                 }
 
             } else if ((*it).GetOrder() == ORDER_BUILD && (*it).build_list.GetCount() > 0) {
@@ -1572,7 +1615,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 (CountOwnUnits(LANDPLT) + CountOwnUnits(LIGHTPLT) == 0) ? Cargo_GetPowerConsumptionRate(LANDPLT) : 0;
 
             if (power_needed + factory_power <= power_generated ||
-                fuel_mining_capacity.fuel < (generators + 1) * Cargo_GetFuelConsumptionRate(POWGEN)) {
+                fuel_mining_capacity.fuel + idle_mine_fuel < (generators + 1) * Cargo_GetFuelConsumptionRate(POWGEN)) {
                 continue;
             }
 
