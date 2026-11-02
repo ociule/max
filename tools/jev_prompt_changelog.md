@@ -3,6 +3,31 @@
 One entry per prompt change tried with `tools/jev_suite.py` or a game batch: what changed, the scores before and
 after, kept or reverted. Newest first. The suite's margin varies by about ±0.03 between runs of the same prompt.
 
+## 2026-11-02 night: defense batch, macro gap, Eco-spheres hold their points
+
+Development maps 0:42, 3:7, 6:13, 100 turns, jev-1.14.0. Defense scores from `tools/jev_defense.py`.
+
+| Batch | Build | Ranks | Points | Worth | Defense score | Points lost |
+| --- | --- | --- | --- | --- | --- | --- |
+| `b9-exits` | `ffb37bb` exits | 1 / 0 (turn 91) / 1 | 66 / 0 / 139 | 595 / 29 / 712 | 86 / 0 / 40 | 54 / 56 / 0 |
+| `b10-defense` | `122ec8c` turrets before contact | 1 / 0 (turn 92) / 1 | 139 / 0 / 139 | 730 / 9 / 704 | 94 / 0 / 100 | 0 / 69 / 0 |
+
+- `b10` built its first turret on turn 5 on worlds 0 and 6; world 0 then chose a turret for 37 of 49 builds and
+  stood 40 turrets with 6 Eco-spheres: too many, a choice to tune with the turret facts (turrets already there,
+  coverage already reached). `b10` world 6 had a Tank stuck in a factory from turn 60 (the repeated move-aside bug,
+  fixed in `0f0660b`); it did not change the rank.
+- World 3/seed 7 is lost in 4 of 6 batches. In `b10` 13 turrets stood before contact and the base still fell: the
+  classic AI took it apart over turns 70-89, about twice Jev's army.
+- The engine takes away the points an Eco-sphere stored when it is destroyed (`units_manager.cpp`,
+  `team_points -= storage`); `b10` world 3 went 69, 45, 26, 0. Kept as a correction of fact (`06de301`): the
+  Eco-sphere role and the construction and military instructions say so. Suite 12/18, 3 forbidden (the known
+  Scanner case), +0.18, unchanged; held out 2/3 (was 1/3).
+- Macro: Jev built no second Mining Station in 12 of 14 games (classic 2-5). Mine sites were only offered within the
+  Constructor's reach; offered sites had a median of 3-4 resources. Surveyor moves also counted unsurveyed cells
+  (hidden information), now fixed. `0f0660b` offers the three richest surveyed sites within 14 cells of the base and
+  `e9f0891` adds sites joined by up to six connectors that Engineers lay; engine checks `--suite jev-links`.
+  `b11-macro` runs `e9f0891` with the prompts before the Eco-sphere correction.
+
 ## 2026-11-02 evening: exits, then the first defense candidate
 
 - Found in the b3-b7 logs: 1,544 finished units could not leave the Heavy Vehicle Plant and 408 Engineers could
