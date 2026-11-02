@@ -180,9 +180,11 @@ def main():
                 print(f'{name}: {" ".join(game_args)} in {slot.name}, bridge port {port}', flush=True)
                 # no audio device: test games are silent even before the hidden game turns sound off
                 environment = dict(os.environ, MAX_JEV_BRIDGE_PORT=str(port), SDL_AUDIO_DRIVER='dummy')
-                game = subprocess.Popen(['wine', 'max-port.exe', *game_args, '--hidden'], cwd=slot, env=environment,
-                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                game.wait(timeout=args.timeout)
+                # the game's stderr says why it stopped when it crashes (wine and C++ runtime messages)
+                with open(run / 'stderr.log', 'w') as game_errors:
+                    game = subprocess.Popen(['wine', 'max-port.exe', *game_args, '--hidden'], cwd=slot,
+                                            env=environment, stdout=subprocess.DEVNULL, stderr=game_errors)
+                    game.wait(timeout=args.timeout)
             except (Exception, KeyboardInterrupt) as error:
                 failure = f'{type(error).__name__}: {error}'
             finally:
