@@ -1029,7 +1029,8 @@ std::vector<Point> JevAi::FindMineSites() const {
                 continue;
             }
 
-            candidates.push_back({raw + fuel + gold - static_cast<int32_t>(path.size()), site});
+            // raw materials pay for everything, fuel only runs generators
+            candidates.push_back({raw * 2 + fuel + gold - static_cast<int32_t>(path.size()), site});
         }
     }
 
@@ -1530,12 +1531,15 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
     const int32_t rate = Cargo_GetRawConsumptionRate(builder->GetUnitType(), 1);
     int32_t spare_power = 0;
+    Cargo base_stock;
+    Cargo base_capacity;
     bool enemies_seen = false;
 
     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
          ++it) {
         if ((*it).team == m_team && (*it).GetComplex()) {
             spare_power = (*it).GetComplex()->power;
+            (*it).GetComplex()->GetCargoInfo(base_stock, base_capacity);
             break;
         }
     }
@@ -1642,6 +1646,13 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 continue;
             }
 
+        } else if (unit_type == ADUMP) {
+            // raw materials mined while the base storage is full are lost
+            if (base_capacity.raw == 0 || base_stock.raw * 5 < base_capacity.raw * 4 ||
+                !FindBuildSite(builder, unit_type, found_site)) {
+                continue;
+            }
+
         } else if (unit_type != MININGST && unit_type != GUNTURRT) {
             continue;
         }
@@ -1656,6 +1667,9 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
         } else if (unit_type == CNCT_4W) {
             sites = GetLinkCells(builder);
+
+        } else if (unit_type == ADUMP) {
+            sites.push_back(found_site);
 
         } else if (FindBuildSite(builder, unit_type, found_site)) {
             sites.push_back(found_site);
@@ -1850,8 +1864,45 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 score += 10;
             }
 
+            if (unit_type == ADUMP) {
+                const int32_t adds = UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], ADUMP)
+                                         ->GetAttribute(ATTRIB_STORAGE);
+
+                facts += ", stores raw materials: your base holds " + std::to_string(base_stock.raw) + " of " +
+                         std::to_string(base_capacity.raw) + " and loses what it mines while full; this adds " +
+                         std::to_string(adds);
+                data["storage"] = {{"base_raw", base_stock.raw}, {"capacity", base_capacity.raw}, {"adds", adds}};
+                score = 40;
+            }
+
             m_options.push_back(
                 {"b" + std::to_string(m_options.size()), Action::BUILD, site, unit_type, nullptr, facts, score, data});
+
+            // the faster rows of the build menu, when the cargo pays for them: the engine's own turns and cost
+            int32_t normal_turns;
+
+            builder->GetTurnsToBuild(unit_type, 1, &normal_turns);
+
+            int32_t fastest_turns = normal_turns;
+
+            for (const int32_t rate : {2, 4}) {
+                int32_t speed_turns;
+                const int32_t speed_cost = builder->GetTurnsToBuild(unit_type, rate, &speed_turns);
+
+                if (speed_turns >= fastest_turns || speed_cost > builder->storage) {
+                    continue;
+                }
+
+                Option fast = m_options.back();
+
+                fast.key = "b" + std::to_string(m_options.size());
+                fast.build_rate = rate;
+                fast.facts += ", built at x" + std::to_string(rate) + " speed: " + std::to_string(speed_turns) +
+                              " turns and " + std::to_string(speed_cost) + " raw materials instead";
+                fast.data["speed"] = {{"rate", rate}, {"turns", speed_turns}, {"cost", speed_cost}};
+                fastest_turns = speed_turns;
+                m_options.push_back(fast);
+            }
         }
     }
 }
@@ -2298,7 +2349,9 @@ json JevAi::GetState(UnitInfo* unit) const {
                              {"fuel_capacity", capacity.fuel},
                              {"gold", materials.gold},
                              {"power_left", (*it).GetComplex()->power},
-                             {"workers_left", (*it).GetComplex()->workers}};
+                             {"workers_left", (*it).GetComplex()->workers},
+                             {"storage_full_turns", m_raw_full_turns},
+                             {"raw_lost_so_far", m_raw_lost}};
             break;
         }
     }
@@ -2356,16 +2409,20 @@ bool JevAi::Ask(UnitInfo* unit, const char* instructions) {
     return m_bridge.Send(request.dump());
 }
 
-void JevAi::StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site) {
+void JevAi::StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site, int32_t build_rate) {
     // same sequence as the classic TaskCreateBuilding and TaskCreateUnit
     SmartObjectArray<ResourceID> build_list = builder->GetBuildList();
 
     build_list.Clear();
     build_list.PushBack(&unit_type);
 
-    // the classic rule: a builder with a full cargo builds at double speed
-    if (!(builder->flags & STATIONARY) &&
-        builder->storage >= builder->GetBaseValues()->GetAttribute(ATTRIB_STORAGE) - 2) {
+    // the speed Jev chose; without one, the classic rule: a builder with a full cargo builds at double speed. The
+    // engine lowers the speed each turn to what the cargo still pays for.
+    if (build_rate > 0) {
+        builder->SetBuildRate(build_rate);
+
+    } else if (!(builder->flags & STATIONARY) &&
+               builder->storage >= builder->GetBaseValues()->GetAttribute(ATTRIB_STORAGE) - 2) {
         builder->SetBuildRate(2);
 
     } else {
@@ -2385,8 +2442,9 @@ void JevAi::StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site) {
     ++m_turn_builds;
 }
 
-void JevAi::WalkToSite(ResourceID unit_type, Point site) {
+void JevAi::WalkToSite(ResourceID unit_type, Point site, int32_t build_rate) {
     m_pending_build = {"", Action::BUILD, site, unit_type, nullptr, "", 0};
+    m_pending_build.build_rate = build_rate;
     m_has_pending_build = true;
     m_move_start = Point(m_unit->grid_x, m_unit->grid_y);
     m_unit->move_to_grid_x = site.x;
@@ -2426,13 +2484,13 @@ bool JevAi::ContinueToSite() {
     }
 
     if (on_site) {
-        StartBuilding(&*m_unit, site.unit_type, site.site);
+        StartBuilding(&*m_unit, site.unit_type, site.site, site.build_rate);
         FinishUnit();
 
     } else {
         m_sites.push_back(site);
 
-        WalkToSite(site.unit_type, site.site);
+        WalkToSite(site.unit_type, site.site, site.build_rate);
     }
 
     return true;
@@ -2510,7 +2568,7 @@ void JevAi::Apply(const std::string& answer) {
 
             if (m_unit->grid_x >= option->destination.x && m_unit->grid_x < option->destination.x + size &&
                 m_unit->grid_y >= option->destination.y && m_unit->grid_y < option->destination.y + size) {
-                StartBuilding(&*m_unit, option->unit_type, option->destination);
+                StartBuilding(&*m_unit, option->unit_type, option->destination, option->build_rate);
                 FinishUnit();
 
             } else {
@@ -2519,10 +2577,10 @@ void JevAi::Apply(const std::string& answer) {
                         std::max<int32_t>(1, m_unit->GetBaseValues()->GetAttribute(ATTRIB_SPEED)) +
                     JevAi_SiteWalkTurns;
 
-                m_sites.push_back(
-                    {m_unit->GetId(), option->unit_type, option->destination, GameManager_TurnCounter, walk_turns});
+                m_sites.push_back({m_unit->GetId(), option->unit_type, option->destination, GameManager_TurnCounter,
+                                   walk_turns, option->build_rate});
 
-                WalkToSite(option->unit_type, option->destination);
+                WalkToSite(option->unit_type, option->destination, option->build_rate);
             }
         } break;
 
@@ -2599,6 +2657,8 @@ void JevAi::BeginTurn() {
         m_sites.clear();
         m_sightings.clear();
         m_links.clear();
+        m_raw_full_turns = 0;
+        m_raw_lost = 0;
     }
 
     m_last_turn = GameManager_TurnCounter;
@@ -2630,6 +2690,27 @@ void JevAi::BeginTurn() {
 
     BalanceEconomy();
     RememberEnemies();
+
+    // raw materials mined while the base storage is full are lost
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team == m_team && (*it).GetComplex()) {
+            Cargo materials;
+            Cargo capacity;
+            Cargo mining;
+            Cargo mining_capacity;
+
+            (*it).GetComplex()->GetCargoInfo(materials, capacity);
+            (*it).GetComplex()->GetCargoMining(mining, mining_capacity);
+
+            if (capacity.raw > 0 && materials.raw >= capacity.raw) {
+                ++m_raw_full_turns;
+                m_raw_lost += mining.raw;
+            }
+
+            break;
+        }
+    }
 
     // a link is done when all its connectors stand
     m_links.erase(std::remove_if(m_links.begin(), m_links.end(),
@@ -2767,7 +2848,7 @@ bool JevAi::CheckEndTurn() {
                                                  [unit_id](const Site& item) { return item.unit_id == unit_id; }),
                                   m_sites.end());
 
-                    StartBuilding(&*m_unit, m_pending_build.unit_type, site);
+                    StartBuilding(&*m_unit, m_pending_build.unit_type, site, m_pending_build.build_rate);
 
                 } else {
                     // moves can wait for a path or for a unit in the way; keep going next turn

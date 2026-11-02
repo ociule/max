@@ -57,6 +57,8 @@ class JevAi final : public NoneAi {
         int32_t score;
         /// The facts as data, for the bridge's prompt templates.
         nlohmann::ordered_json data;
+        /// Build speed: 1, 2 or 4; 0 lets the controller choose.
+        int32_t build_rate{0};
     };
 
     /// A building site a builder is still walking to.
@@ -67,6 +69,7 @@ class JevAi final : public NoneAi {
         Point site;
         int32_t turn;
         int32_t walk_turns;
+        int32_t build_rate;
     };
 
     /// Where the team saw an enemy: buildings are kept, units for a few turns.
@@ -109,6 +112,9 @@ class JevAi final : public NoneAi {
     Action m_last_action{Action::STAY};
     int32_t m_units_lost{0};
     int32_t m_explored_cells{0};
+    /// Turns the base started with full raw material storage, and the raw materials mined on them, which are lost.
+    int32_t m_raw_full_turns{0};
+    int32_t m_raw_lost{0};
     int32_t m_last_turn{0};
     bool m_turn_done_logged{false};
     std::vector<uint8_t> m_explored;
@@ -145,8 +151,8 @@ class JevAi final : public NoneAi {
     nlohmann::ordered_json GetState(UnitInfo* unit) const;
     bool Ask(UnitInfo* unit, const char* instructions);
     void Apply(const std::string& answer);
-    void StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site);
-    void WalkToSite(ResourceID unit_type, Point site);
+    void StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site, int32_t build_rate = 0);
+    void WalkToSite(ResourceID unit_type, Point site, int32_t build_rate);
     bool ContinueToSite();
     void FinishUnit();
     const char* GetTeamName() const;
