@@ -1884,6 +1884,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             builder->GetTurnsToBuild(unit_type, 1, &normal_turns);
 
             int32_t fastest_turns = normal_turns;
+            const Option normal = m_options.back();
 
             for (const int32_t rate : {2, 4}) {
                 int32_t speed_turns;
@@ -1893,12 +1894,13 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                     continue;
                 }
 
-                Option fast = m_options.back();
+                Option fast = normal;
 
                 fast.key = "b" + std::to_string(m_options.size());
                 fast.build_rate = rate;
                 fast.facts += ", built at x" + std::to_string(rate) + " speed: " + std::to_string(speed_turns) +
-                              " turns and " + std::to_string(speed_cost) + " raw materials instead";
+                              (speed_turns == 1 ? " turn" : " turns") + " and " + std::to_string(speed_cost) +
+                              " raw materials instead";
                 fast.data["speed"] = {{"rate", rate}, {"turns", speed_turns}, {"cost", speed_cost}};
                 fastest_turns = speed_turns;
                 m_options.push_back(fast);

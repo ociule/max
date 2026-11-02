@@ -211,7 +211,8 @@ def render_build(o):
             f"while full; this adds {st['adds']}"
     if 'speed' in o:
         sp = o['speed']
-        text += f", built at x{sp['rate']} speed: {sp['turns']} turns and {sp['cost']} raw materials instead"
+        text += f", built at x{sp['rate']} speed: {sp['turns']} turn{'' if sp['turns'] == 1 else 's'} and " \
+            f"{sp['cost']} raw materials instead"
     return text
 
 
