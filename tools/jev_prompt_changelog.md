@@ -3,6 +3,24 @@
 One entry per prompt change tried with `tools/jev_suite.py` or a game batch: what changed, the scores before and
 after, kept or reverted. Newest first. The suite's margin varies by about ±0.03 between runs of the same prompt.
 
+## 2026-11-02 evening: exits, then the first defense candidate
+
+- Found in the b3-b7 logs: 1,544 finished units could not leave the Heavy Vehicle Plant and 408 Engineers could
+  not leave a Gun Turret ("no free cell around"). Packed sites and parked units took every exit, so factories
+  stalled with a unit inside. This weakens the army and worth numbers of all earlier batches; their points wins
+  stand. Fixed in `ffb37bb` (sites keep two exits, moves avoid factory exits, parked units are moved aside),
+  engine checks `--suite jev-exits`.
+- `b8-exits` was stopped after about 15 minutes, lost to a harness issue: the test games played sound. Games and
+  engine checks now run with `SDL_AUDIO_DRIVER=dummy`. `b9-exits` reruns it with the saved exe
+  `runs/exes/ffb37bb-exits.exe`.
+- Defense candidate `122ec8c` (exe `runs/exes/122ec8c-defense.exe`): Gun Turrets before contact at up to three
+  distinct sites, scored by base buildings covered and the way enemies come (from remembered enemy buildings or
+  recent sightings to the base); one real exit is enough (the user's rule: never take the last exit of a factory or
+  building site). Replays of logged Engineer questions: turn 1 picks the Power Generator (0.57), turn 9 with power
+  in place picks a turret (0.35); "stay" is high (0.24-0.36). No defense instruction added yet, to keep the first
+  defense batch a facts-only change. Run at most 3 games at a time: the classic AI thinks for a fixed time, so a
+  busier machine weakens it.
+
 ## 2026-11-02: recovered loop, reliable baseline, supply facts and Scanner probe
 
 - Fixed parallel game-directory allocation with lifetime OS locks. New runs preserve prompt snapshots and hashes;
