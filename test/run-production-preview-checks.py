@@ -2,7 +2,6 @@
 """Run real-engine forecast, Jev attack or Jev exit checks with local assets and no model calls."""
 import argparse
 import json
-import os
 from pathlib import Path
 import shlex
 import shutil
@@ -87,10 +86,14 @@ def main():
         if not dest.exists() and not dest.is_symlink():
             dest.symlink_to(source.resolve())
     shutil.copy2(args.assets_dir / 'settings.json', runtime / 'settings.json')
+    settings = json.loads((runtime / 'settings.json').read_text())  # no sound: the game plays it through miniaudio
+    settings['settings']['SETUP'].update({'disable_music': 1, 'disable_fx': 1, 'disable_voice': 1, 'disable_movie': 1,
+                                          'intro_movie': 0, 'music_level': 0, 'movie_level': 0, 'fx_sound_level': 0,
+                                          'voice_level': 0})
+    (runtime / 'settings.json').write_text(json.dumps(settings, indent=4))
     shutil.copy2(output / 'checks.exe', runtime / 'checks.exe')
     with (runtime / 'console.log').open('w') as log:
         subprocess.run(['wine', 'checks.exe'], cwd=runtime, stdout=log, stderr=subprocess.STDOUT,
-                       env=dict(os.environ, SDL_AUDIO_DRIVER='dummy'),
                        timeout=120, check=True)
     print((runtime / f'{args.suite}-checks.txt').read_text())
 

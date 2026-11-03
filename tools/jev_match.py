@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -34,6 +35,19 @@ DEFAULT_EXE = ROOT / 'build' / 'windows-hotkeys' / 'max-port.exe'
 
 # files the game writes or that each slot needs its own copy of
 OWN_FILES = {'max-port.exe', 'settings.json', 'stdout.txt', 'console.log', '.busy', '.lock'}
+
+
+# the game plays sound through miniaudio from its first frame, before a hidden game turns sound off: switch it off
+# in the settings the game reads at startup
+SILENT_SETTINGS = {'disable_music': 1, 'disable_fx': 1, 'disable_voice': 1, 'disable_movie': 1, 'intro_movie': 0,
+                   'music_level': 0, 'movie_level': 0, 'fx_sound_level': 0, 'voice_level': 0}
+
+
+def silence(settings_file):
+    if settings_file.exists():
+        settings = json.loads(settings_file.read_text())
+        settings.setdefault('settings', {}).setdefault('SETUP', {}).update(SILENT_SETTINGS)
+        settings_file.write_text(json.dumps(settings, indent=4))
 
 
 def free_port():
@@ -142,6 +156,12 @@ def main():
     parser.add_argument('game_args', nargs=argparse.REMAINDER, help='-- then the game arguments')
     args = parser.parse_args()
 
+    # a stopped match (kill, pkill) cleans up like an interrupted one: game and bridge stopped, logs kept
+    def stop_requested(signum, frame):
+        raise KeyboardInterrupt(f'signal {signum}')
+
+    signal.signal(signal.SIGTERM, stop_requested)
+
     game_args = args.game_args[1:] if args.game_args[:1] == ['--'] else args.game_args
     name = args.name or datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
     run = RUNS / name
@@ -155,6 +175,7 @@ def main():
     with take_slot() as slot:
         port = free_port()
         shutil.copy2(args.exe, slot / 'max-port.exe')
+        silence(slot / 'settings.json')
         shutil.copy2(ROOT / 'tools' / 'jev_prompts.py', run / 'prompts.py')
         (slot / 'stdout.txt').unlink(missing_ok=True)
 
@@ -178,8 +199,7 @@ def main():
                 if bridge.poll() is not None:
                     raise RuntimeError('Bridge did not start; see bridge.log')
                 print(f'{name}: {" ".join(game_args)} in {slot.name}, bridge port {port}', flush=True)
-                # no audio device: test games are silent even before the hidden game turns sound off
-                environment = dict(os.environ, MAX_JEV_BRIDGE_PORT=str(port), SDL_AUDIO_DRIVER='dummy')
+                environment = dict(os.environ, MAX_JEV_BRIDGE_PORT=str(port))
                 # the game's stderr says why it stopped when it crashes (wine and C++ runtime messages)
                 with open(run / 'stderr.log', 'w') as game_errors:
                     game = subprocess.Popen(['wine', 'max-port.exe', *game_args, '--hidden'], cwd=slot,
