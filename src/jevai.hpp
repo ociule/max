@@ -133,7 +133,7 @@ class JevAi final : public NoneAi {
     bool FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const;
     bool LeavesExits(ResourceID unit_type, Point site) const;
     std::vector<Point> FindDefenseSites(UnitInfo* builder, ResourceID unit_type) const;
-    std::vector<Point> FindMineSites() const;
+    std::vector<Point> FindMineSites(UnitInfo* builder = nullptr) const;
     bool FindConnectorPath(Point site, int32_t size, std::vector<Point>& path) const;
     std::vector<Point> GetLinkCells(UnitInfo* builder) const;
     void RememberEnemies();

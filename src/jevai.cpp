@@ -119,13 +119,21 @@ static int32_t JevAi_GetDistance(Point a, Point b) {
 }
 
 /// Every cell of a building site must be free, not only the top left one.
-static bool JevAi_IsSiteFree(uint16_t team, ResourceID unit_type, Point site) {
+static bool JevAi_IsSiteFree(uint16_t team, ResourceID unit_type, Point site, UnitInfo* builder = nullptr) {
     const int32_t size = (ResourceManager_GetUnit(unit_type).GetFlags() & BUILDING) ? 2 : 1;
 
     for (int32_t x = site.x; x < site.x + size; ++x) {
         for (int32_t y = site.y; y < site.y + size; ++y) {
             if (!Access_IsAccessible(unit_type, team, x, y, AccessModifier_EnemySameClassBlocks)) {
                 return false;
+            }
+            // A stationary builder can otherwise be sent to a site occupied by an idle friendly unit forever.
+            // Roads and connectors remain passable; the builder itself may stand inside its building footprint.
+            if (builder && unit_type != CNCT_4W && unit_type != ROAD) {
+                UnitInfo* occupant = Access_GetTeamUnit(x, y, team, MOBILE_LAND_UNIT);
+                if (occupant && occupant != builder) {
+                    return false;
+                }
             }
         }
     }
@@ -994,7 +1002,7 @@ std::vector<Point> JevAi::GetLinkCells(UnitInfo* builder) const {
     return cells;
 }
 
-std::vector<Point> JevAi::FindMineSites() const {
+std::vector<Point> JevAi::FindMineSites(UnitInfo* builder) const {
     // the richest surveyed sites around the base that join it: a mine away from the base has no power
     constexpr int32_t search_radius = 14;
     constexpr int32_t maximum_sites = 3;
@@ -1019,7 +1027,8 @@ std::vector<Point> JevAi::FindMineSites() const {
 
             Survey_GetTotalResourcesInArea(x, y, 1, &raw, &gold, &fuel, false, m_team);
 
-            if (raw + fuel + gold == 0 || !JevAi_IsSiteFree(m_team, MININGST, site) || !LeavesExits(MININGST, site)) {
+            if (raw + fuel + gold == 0 || !JevAi_IsSiteFree(m_team, MININGST, site, builder) ||
+                !LeavesExits(MININGST, site)) {
                 continue;
             }
 
@@ -1137,7 +1146,7 @@ std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_ty
                 continue;
             }
 
-            if (!JevAi_IsInsideMap(site) || !JevAi_IsSiteFree(m_team, unit_type, site) ||
+            if (!JevAi_IsInsideMap(site) || !JevAi_IsSiteFree(m_team, unit_type, site, builder) ||
                 !LeavesExits(unit_type, site)) {
                 continue;
             }
@@ -1214,7 +1223,7 @@ bool JevAi::FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) 
                 continue;
             }
 
-            if (!JevAi_IsSiteFree(m_team, unit_type, candidate) || !LeavesExits(unit_type, candidate)) {
+            if (!JevAi_IsSiteFree(m_team, unit_type, candidate, builder) || !LeavesExits(unit_type, candidate)) {
                 continue;
             }
 
@@ -1353,7 +1362,8 @@ void JevAi::BalanceEconomy() {
             UnitInfo& station = *it;
 
             if (station.GetComplex() != complex || station.GetUnitType() != MININGST || station.hits == 0 ||
-                station.GetOrder() != ORDER_POWER_ON) {
+                (station.GetOrder() != ORDER_POWER_ON && station.GetOrder() != ORDER_POWER_OFF &&
+                 station.GetOrder() != ORDER_AWAIT)) {
                 continue;
             }
 
@@ -1372,10 +1382,35 @@ void JevAi::BalanceEconomy() {
 
             station.fuel_mining += extra_fuel;
             station.total_mining = station.raw_mining + station.fuel_mining + station.gold_mining;
-            fuel_mined += station.fuel_mining;
+            if (station.GetOrder() == ORDER_POWER_ON) {
+                fuel_mined += station.fuel_mining;
+            }
+        }
+
+        // Recover the mine and its generators together. Waiting for mined fuel before powering a stopped fuel
+        // mine deadlocks an empty network. The normal allocation manager checks the combined next-turn balance
+        // and shuts down anything it cannot supply; it does not grant free fuel or power.
+        for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+             ++it) {
+            if ((*it).GetComplex() == complex && (*it).GetUnitType() == MININGST && (*it).hits > 0 &&
+                (*it).fuel_mining > 0 &&
+                ((*it).GetOrder() == ORDER_POWER_OFF || (*it).GetOrder() == ORDER_AWAIT)) {
+                UnitsManager_SetNewOrder(it->Get(), ORDER_POWER_ON, ORDER_STATE_INIT);
+                ProductionManager_OptimizeProduction(m_team, complex, nullptr, false);
+            }
         }
 
         Access_UpdateResourcesTotal(complex);
+
+        // Recovery may have changed which mines can run.
+        fuel_mined = 0;
+        for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+             ++it) {
+            if ((*it).GetComplex() == complex && (*it).GetUnitType() == MININGST && (*it).hits > 0 &&
+                (*it).GetOrder() == ORDER_POWER_ON) {
+                fuel_mined += (*it).fuel_mining;
+            }
+        }
 
         int32_t generators_on = 0;
 
@@ -1738,7 +1773,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             sites = FindDefenseSites(builder, unit_type);
 
         } else if (unit_type == MININGST) {
-            sites = FindMineSites();
+            sites = FindMineSites(builder);
 
         } else if (unit_type == CNCT_4W) {
             sites = GetLinkCells(builder);
@@ -2011,6 +2046,20 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
         factory->GetComplex()->GetCargoMining(mining, mining_capacity);
     }
 
+    const auto add_supply = [this, factory](Option& option, int32_t speed) {
+        if (!factory->GetComplex()) {
+            return;
+        }
+        const Cargo balance = ProductionManager_PreviewProduction(m_team, factory->GetComplex(), factory, speed);
+        option.data["supply"] = {{"raw_balance", balance.raw}, {"fuel_balance", balance.fuel},
+                                 {"power_balance", balance.power}, {"workers_balance", balance.life},
+                                 {"gold_balance", balance.gold}};
+        option.facts += "; next-turn balance at this speed, after other buildings and generator switching: raw " +
+                        std::to_string(balance.raw) + ", fuel " + std::to_string(balance.fuel) + ", power " +
+                        std::to_string(balance.power) + ", workers " + std::to_string(balance.life) + ", gold " +
+                        std::to_string(balance.gold) + "; negative means a shortage without reallocating";
+    };
+
     for (const ResourceID unit_type : Builder_GetBuildableUnits(m_team, factory->GetUnitType())) {
         const int32_t turns = BuildMenu_GetTurnsToBuild(unit_type, m_team);
         std::string facts = "produce a " + JevAi_GetTypeName(unit_type) + ": " +
@@ -2048,6 +2097,8 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
 
         // the faster rows: a factory draws more raw materials from the base each turn, which spends a surplus
         const Option normal = m_options.back();
+        m_options.back().build_rate = 1;
+        add_supply(m_options.back(), 1);
         int32_t fastest_turns;
 
         factory->GetTurnsToBuild(unit_type, 1, &fastest_turns);
@@ -2074,6 +2125,7 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
                                   {"cost", speed_cost},
                                   {"per_turn", per_turn},
                                   {"base_mines", mining.raw}};
+            add_supply(fast, speed);
             fastest_turns = speed_turns;
             m_options.push_back(fast);
         }
@@ -2603,6 +2655,8 @@ json JevAi::GetState(UnitInfo* unit) const {
     if (is_factory && local_complex) {
         const Cargo balance = ProductionManager_PreviewProduction(m_team, local_complex, unit);
         state["production"] = {
+            {"build_rate", 1},
+            {"scope", "normal speed only; each production option has its own supply forecast"},
             {"raw_per_turn", Cargo_GetRawConsumptionRate(unit->GetUnitType(), 1)},
             {"power_needed", Cargo_GetPowerConsumptionRate(unit->GetUnitType())},
             {"workers_needed", Cargo_GetLifeConsumptionRate(unit->GetUnitType())},
@@ -2720,7 +2774,8 @@ bool JevAi::ContinueToSite() {
 
     m_sites.erase(entry);
 
-    if (!JevAi_IsSiteFree(m_team, site.unit_type, site.site) || GameManager_TurnCounter - site.turn > site.walk_turns) {
+    if (!JevAi_IsSiteFree(m_team, site.unit_type, site.site, &*m_unit) ||
+        GameManager_TurnCounter - site.turn > site.walk_turns) {
         SDL_Log("Jev %s: %s gives up the %s site at %s.", GetTeamName(), JevAi_GetUnitName(&*m_unit).c_str(),
                 JevAi_GetTypeName(site.unit_type).c_str(), JevAi_FormatPoint(site.site).c_str());
 
@@ -3116,7 +3171,8 @@ bool JevAi::CheckEndTurn() {
                 const Point site = m_pending_build.destination;
 
                 if (is_idle && m_unit->grid_x >= site.x && m_unit->grid_x < site.x + size && m_unit->grid_y >= site.y &&
-                    m_unit->grid_y < site.y + size && JevAi_IsSiteFree(m_team, m_pending_build.unit_type, site)) {
+                    m_unit->grid_y < site.y + size &&
+                    JevAi_IsSiteFree(m_team, m_pending_build.unit_type, site, &*m_unit)) {
                     const uint16_t unit_id = m_unit->GetId();
 
                     m_sites.erase(std::remove_if(m_sites.begin(), m_sites.end(),
