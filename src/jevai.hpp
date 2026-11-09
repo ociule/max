@@ -128,6 +128,7 @@ class JevAi final : public NoneAi {
     int32_t GetDanger(UnitInfo* unit, Point point, int32_t* nearest_enemy) const;
     int32_t CountOwnUnits(ResourceID unit_type) const;
     bool GetBasePosition(Point& position) const;
+    Complex* GetEconomyComplex() const;
     int32_t GetDistanceToOwnBuilder(Point point) const;
     bool TouchesBase(ResourceID unit_type, Point site) const;
     bool FindBuildSite(UnitInfo* builder, ResourceID unit_type, Point& site) const;
