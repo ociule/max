@@ -64,7 +64,7 @@ class JevAi final : public NoneAi {
     /// A building site a builder is still walking to.
     struct Site {
         /// UnitInfo::GetId(); UnitInfo::unit_id is only the per type number shown in unit names.
-        uint16_t unit_id;
+        uint32_t unit_id;
         ResourceID unit_type;
         Point site;
         int32_t turn;
@@ -88,12 +88,12 @@ class JevAi final : public NoneAi {
     State m_state{State::SELECT};
     std::vector<Link> m_links;
     /// Scouts watching the way in: unit (UnitInfo::GetId()) and its post.
-    std::vector<std::pair<uint16_t, Point>> m_pickets;
+    std::vector<std::pair<uint32_t, Point>> m_pickets;
     std::vector<Sighting> m_sightings;
     std::vector<Site> m_sites;
     std::vector<SmartPointer<UnitInfo>> m_units;
     std::vector<SmartPointer<UnitInfo>> m_handled;
-    std::vector<uint16_t> m_lost;
+    std::vector<uint32_t> m_lost;
     SmartPointer<UnitInfo> m_unit;
     SmartPointer<UnitInfo> m_refill_source;
     std::vector<Option> m_options;
@@ -110,7 +110,7 @@ class JevAi final : public NoneAi {
     int32_t m_turn_builds{0};
     int32_t m_turn_attacks{0};
     int32_t m_turn_exit_clears{0};
-    std::vector<uint16_t> m_turn_cleared_units;
+    std::vector<uint32_t> m_turn_cleared_units;
     Action m_last_action{Action::STAY};
     int32_t m_units_lost{0};
     int32_t m_explored_cells{0};

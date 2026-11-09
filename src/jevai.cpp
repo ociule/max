@@ -2951,7 +2951,7 @@ void JevAi::Apply(const std::string& answer) {
 
         case Action::MOVE: {
             if (option->data.value("action", "") == "picket") {
-                const uint16_t id = m_unit->GetId();
+                const uint32_t id = m_unit->GetId();
 
                 m_pickets.erase(std::remove_if(m_pickets.begin(), m_pickets.end(),
                                                [id](const auto& picket) { return picket.first == id; }),
@@ -3197,7 +3197,7 @@ bool JevAi::CheckEndTurn() {
                 if (is_idle && m_unit->grid_x >= site.x && m_unit->grid_x < site.x + size && m_unit->grid_y >= site.y &&
                     m_unit->grid_y < site.y + size &&
                     JevAi_IsSiteFree(m_team, m_pending_build.unit_type, site, &*m_unit)) {
-                    const uint16_t unit_id = m_unit->GetId();
+                    const uint32_t unit_id = m_unit->GetId();
 
                     m_sites.erase(std::remove_if(m_sites.begin(), m_sites.end(),
                                                  [unit_id](const Site& item) { return item.unit_id == unit_id; }),

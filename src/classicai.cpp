@@ -41,6 +41,8 @@ void ClassicAi::TasksPending(const char* reason) { AiPlayer_Teams[m_team].Change
 
 void ClassicAi::UnitSpotted(UnitInfo* unit) { AiPlayer_Teams[m_team].UnitSpotted(unit); }
 
+void ClassicAi::UnitHidden(UnitInfo* unit) { AiPlayer_Teams[m_team].UnitHidden(unit); }
+
 void ClassicAi::RemoveUnit(UnitInfo* unit) { AiPlayer_Teams[m_team].RemoveUnit(unit); }
 
 void ClassicAi::FileSave(SmartFileWriter& file) { AiPlayer_Teams[m_team].FileSave(file); }

@@ -61,6 +61,8 @@ public:
     virtual void TasksPending(const char* reason) = 0;
 
     virtual void UnitSpotted(UnitInfo* unit) = 0;
+    /// A unit of another team left this team's sight.
+    virtual void UnitHidden(UnitInfo* unit) = 0;
     virtual void RemoveUnit(UnitInfo* unit) = 0;
 
     virtual void FileSave(SmartFileWriter& file) = 0;

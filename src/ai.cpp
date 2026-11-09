@@ -376,8 +376,10 @@ void Ai_UnitSpotted(UnitInfo* unit, uint16_t team) {
 }
 
 void Ai_UnitHidden(UnitInfo* unit, uint16_t team) {
-    if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER && (unit->flags & SELECTABLE)) {
-        AiPlayer_Teams[team].UnitHidden(unit);
+    AiController* controller = AiController_Get(team);
+
+    if (controller && (unit->flags & SELECTABLE)) {
+        controller->UnitHidden(unit);
     }
 }
 

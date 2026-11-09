@@ -45,6 +45,7 @@ public:
     void UpdateMineMap(Point point) override {}
     void TasksPending(const char* reason) override {}
     void UnitSpotted(UnitInfo* unit) override {}
+    void UnitHidden(UnitInfo* unit) override {}
     void RemoveUnit(UnitInfo* unit) override {}
     void FileSave(SmartFileWriter& file) override;
     void FileLoad(SmartFileReader& file) override;
