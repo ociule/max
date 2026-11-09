@@ -52,9 +52,9 @@ std::string Snapshot() {
     return out.str();
 }
 
-Cargo Preview(UnitInfo* factory) {
+Cargo Preview(UnitInfo* factory, int32_t build_rate = 1) {
     const auto before = Snapshot();
-    const auto balance = ProductionManager_PreviewProduction(factory->team, factory->GetComplex(), factory);
+    const auto balance = ProductionManager_PreviewProduction(factory->team, factory->GetComplex(), factory, build_rate);
     Check(before == Snapshot(), "Preview leaves all orders, inventories, mining and network balances unchanged");
     return balance;
 }
@@ -79,6 +79,10 @@ void RuntimeProductionPreviewChecks() {
           "Idle fueled generators make production affordable despite zero current spare power");
     balance = Preview(factory);
     Check(balance.fuel == 2, "Repeated preview does not activate generators or consume fuel");
+    balance = Preview(factory, 2);
+    Check(balance.raw == 23, "x2 preview charges twelve raw materials rather than the normal three");
+    balance = Preview(factory, 4);
+    Check(balance.raw == -1, "x4 preview reports the actual shortage at thirty-six raw materials per turn");
 
     mine->fuel_mining = 0;
     balance = Preview(factory);
