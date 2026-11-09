@@ -238,15 +238,19 @@ def describe_coverage(c):
 
 
 def render_produce(o):
-    text = f"produce {article(o['type'])} {o['type']}: {describe_purpose(o['purpose'])} {o['turns']} turns, " \
-        f"{o['cost']} raw materials, {describe_stats(o['stats'])}, you have {o['have']}"
+    speed = o.get('speed', o)
+    text = f"produce {article(o['type'])} {o['type']}: {describe_purpose(o['purpose'])} " \
+        f"{speed['turns']} turn{'' if speed['turns'] == 1 else 's'}, " \
+        f"{speed['cost']} raw materials, {describe_stats(o['stats'])}, you have {o['have']}"
     if 'base_mines' in o:
-        text += f", uses {o['per_turn']} raw materials per turn from the base, which mines {o['base_mines']} per turn"
+        text += f", uses {speed['per_turn']} raw materials per turn from the base, which mines {o['base_mines']} per turn"
     if 'speed' in o:
-        sp = o['speed']
-        text += f", produced at x{sp['rate']} speed: {sp['turns']} turn{'' if sp['turns'] == 1 else 's'} and " \
-            f"{sp['cost']} raw materials instead, {sp['per_turn']} per turn from the base, which mines " \
-            f"{sp['base_mines']} per turn"
+        text += f", produced at x{speed['rate']} speed"
+    if 'supply' in o:
+        s = o['supply']
+        text += '; next-turn balance at this speed, after other buildings and generator switching: ' \
+            f"raw {s['raw_balance']}, fuel {s['fuel_balance']}, power {s['power_balance']}, " \
+            f"workers {s['workers_balance']}, gold {s['gold_balance']}; negative means a shortage without reallocating"
     return text
 
 

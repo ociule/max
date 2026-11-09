@@ -92,6 +92,21 @@ void RuntimeJevLinksChecks() {
     auto sites = ai.FindMineSites();
     Check(std::find(sites.begin(), sites.end(), rich) != sites.end(), "The rich deposit is offered as a mine site");
 
+    auto constructor = UnitsManager_DeployUnit(CONSTRCT, PLAYER_TEAM_RED, nullptr, plant.x + 2, plant.y + 4, 0);
+    auto blocker = UnitsManager_DeployUnit(ENGINEER, PLAYER_TEAM_RED, nullptr, rich.x, rich.y, 0);
+    blocker->SetOrder(ORDER_AWAIT);
+    blocker->SetOrderState(ORDER_STATE_EXECUTING_ORDER);
+    Check(Access_GetTeamUnit(rich.x, rich.y, PLAYER_TEAM_RED, MOBILE_LAND_UNIT) == blocker.Get(),
+          "The parked Engineer occupies the mine destination in the engine map");
+    sites = ai.FindMineSites(constructor.Get());
+    Check(std::none_of(sites.begin(), sites.end(), [&](Point cell) {
+              return rich.x >= cell.x && rich.x < cell.x + 2 && rich.y >= cell.y && rich.y < cell.y + 2;
+          }), "An idle Engineer inside a mine footprint prevents the b18 repeated blocked destination");
+    sites = ai.FindMineSites(blocker.Get());
+    Check(std::find(sites.begin(), sites.end(), rich) != sites.end(),
+          "The builder itself may occupy a building footprint");
+    blocker->hits = 0;
+
     // an unsurveyed deposit is not known to the team
     const Point hidden(plant.x - 5, plant.y);
     for (int dx = 0; dx < 2; ++dx) {

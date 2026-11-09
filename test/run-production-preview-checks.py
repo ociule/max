@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build/windows-hotkeys')
     parser.add_argument('--assets-dir', type=Path, default=ROOT / 'runs/base')
-    parser.add_argument('--suite', choices=['production-preview', 'jev-attack', 'jev-exits', 'jev-links'], default='production-preview')
+    parser.add_argument('--suite', choices=['production-preview', 'jev-attack', 'jev-exits', 'jev-links', 'jev-economy'], default='production-preview')
     parser.add_argument('--attack-candidate', action='store_true',
                         help='test the saved attack-approach experiment in a generated source copy')
     args = parser.parse_args()
@@ -29,13 +29,14 @@ def main():
         'jev-attack': ('RuntimeJevAttackChecks', 'jev_attack_runtime.cpp'),
         'jev-exits': ('RuntimeJevExitsChecks', 'jev_exits_runtime.cpp'),
         'jev-links': ('RuntimeJevLinksChecks', 'jev_links_runtime.cpp'),
+        'jev-economy': ('RuntimeJevEconomyChecks', 'jev_economy_runtime.cpp'),
     }[args.suite]
     output.mkdir(parents=True, exist_ok=True)
     if not args.run_only:
         subprocess.run(['cmake', '--build', str(build), '--parallel', '6'], check=True)
         entries = json.loads((build / 'compile_commands.json').read_text())
         sources = {'main.cpp': ROOT / 'test' / source_name}
-        if args.suite in ('jev-attack', 'jev-exits', 'jev-links'):
+        if args.suite.startswith('jev-'):
             # Expose controller internals only in this generated test build. The game header stays unchanged.
             header = (ROOT / 'src/jevai.hpp').read_text()
             (output / 'jevai.hpp').write_text(header.replace('class JevAi final : public NoneAi {',
