@@ -63,7 +63,7 @@ class ProductionManager {
                                        const char* format1, const char* format2);
 
     friend Cargo ProductionManager_PreviewProduction(const uint16_t team, Complex* const complex,
-                                                    UnitInfo* const unit);
+                                                    UnitInfo* const unit, const int32_t build_rate);
     friend bool ProductionManager_UpdateIndustryOrders(const uint16_t team, Complex* const complex);
     friend void ProductionManager_OptimizeProduction(const uint16_t team, Complex* const complex, UnitInfo* const unit,
                                                      bool show_messages);
@@ -829,10 +829,11 @@ bool ProductionManager_UpdateIndustryOrders(const uint16_t team, Complex* const 
     return is_found;
 }
 
-Cargo ProductionManager_PreviewProduction(const uint16_t team, Complex* const complex, UnitInfo* const unit) {
+Cargo ProductionManager_PreviewProduction(const uint16_t team, Complex* const complex, UnitInfo* const unit,
+                                          const int32_t build_rate) {
     ProductionManager manager(team, complex);
     manager.total -= Cargo_GetNetProduction(unit, true);
-    manager.total.raw -= Cargo_GetRawConsumptionRate(unit->GetUnitType(), 1);
+    manager.total.raw -= Cargo_GetRawConsumptionRate(unit->GetUnitType(), build_rate);
     manager.total.fuel -= Cargo_GetFuelConsumptionRate(unit->GetUnitType());
     manager.total.gold -= Cargo_GetGoldConsumptionRate(unit->GetUnitType());
     manager.total.power -= Cargo_GetPowerConsumptionRate(unit->GetUnitType());

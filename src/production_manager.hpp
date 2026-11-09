@@ -26,9 +26,10 @@
 
 struct Cargo;
 
-// Next-turn balance after starting normal-rate production and balancing existing generators.
+// Next-turn balance after starting production at the requested speed and balancing existing generators.
 // Read-only: does not reallocate mining, pause buildings or issue orders.
-Cargo ProductionManager_PreviewProduction(const uint16_t team, Complex* const complex, UnitInfo* const unit);
+Cargo ProductionManager_PreviewProduction(const uint16_t team, Complex* const complex, UnitInfo* const unit,
+                                          const int32_t build_rate = 1);
 
 bool ProductionManager_UpdateIndustryOrders(const uint16_t team, Complex* const complex);
 void ProductionManager_OptimizeProduction(const uint16_t team, Complex* const complex, UnitInfo* const unit,
