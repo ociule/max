@@ -3,6 +3,36 @@
 One entry per prompt change tried with `tools/jev_suite.py` or a game batch: what changed, the scores before and
 after, kept or reverted. Newest first. The suite's margin varies by about ±0.03 between runs of the same prompt.
 
+## 2026-11-03: speed-specific forecasts, mine recovery, construction guards
+
+- Recovered completed `b18-scout-wall` (100 turns, worlds/seeds 0:42, 3:7, 6:13,
+  jev-1.14.0): ranks 1/2/2, points 82/0/0, worth 559/232/424. The role/scouting
+  candidate has not established a strength gain. Missile Launcher: 2,067 offered
+  option entries, zero picks; picket: four offered, zero picks.
+- `b19-economy` adds forecasts for the actual factory speed, recovery of an empty
+  stopped fuel-mine/generator network, and rejection of occupied construction
+  footprints. Faster factory rows now state their actual turns/cost/use directly.
+  Turn-41 world-6 replay: normal Tank 3/3 with the new facts (0.38–0.53), versus
+  normal twice and x4 once with the original facts. Derived forecast requests
+  are labelled as derived, not live game observations.
+- Frozen b18/current suite: 14/21 → 15/21 acceptable, three forbidden in both
+  (the known Scanner case); held-out 3/3 in both. No military instructions changed.
+- `b19`, 60-turn economy check: ranks 2/2/1, points 0/0/2, worth 536/364/624,
+  mines 4/3/2, zero abandoned mine sites and zero API errors. World 6's second
+  mine stood on turn 39 and both mines stayed on past the former turn-42 blackout.
+  The shorter horizon changes Jev's turns-left facts; this is not a controlled
+  strength comparison with the 100-turn batches or the defense promotion gate.
+- That batch exposed construction starting with insufficient cargo (world 3:
+  6 carried, 24 cost, finished at -18), implicit doubling of normal-speed builds,
+  and construction facts reading an isolated turret's empty complex. Follow-up
+  source filters unaffordable builds, validates cargo again before execution,
+  executes the advertised normal speed, and selects the economic network by
+  live mine count then raw storage. Factories still describe their own network.
+  These follow-ups pass 34 economy engine checks but have no paid game batch yet.
+- Forecasts: 24 engine checks; mine links/sites: 19; exits: 23; Python tooling: 9.
+  Frozen executables: b19-economy.exe SHA-256 7826e0d751ebce43…, b20-budget-base.exe c27bc99370b8df81….
+  Six completed games and provenance: `tools/jev_experiments/2026-11-03-results.json`.
+
 ## 2026-11-02 late: expansion, surveying, power for mines, raw materials
 
 Development maps 0:42, 3:7, 6:13, 100 turns, jev-1.14.0.

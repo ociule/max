@@ -1,0 +1,317 @@
+{
+  "date": "2026-11-03",
+  "decision": "No tactical strength promotion. b19 is a short economy validation; its follow-up affordability and base-network fixes have engine checks but are not part of the b19 executable.",
+  "limitations": [
+    "One stochastic batch per executable; b18 and b19 have different game horizons and turns-left facts.",
+    "Historical raw_per_turn for construction questions and base logging can refer to an isolated defense network; the follow-up source corrects this. Preserve the original reported values here.",
+    "The shared checkout includes concurrent experimental policy-controller work. b19 uses a frozen executable and jev,classic controllers only."
+  ],
+  "batches": [
+    {
+      "label": "b18-scout-wall",
+      "turn_limit": 100,
+      "games": [
+        {
+          "summary": {
+            "name": "b18-scout-wall-w0-s42",
+            "turns_played": 100,
+            "status": "complete",
+            "mines_max": 1,
+            "units": 12,
+            "buildings": 29,
+            "points": 82,
+            "worth": 559,
+            "enemy_points": 0,
+            "enemy_worth": 1010,
+            "enemy_units": 26,
+            "enemy_buildings": 62,
+            "first_factory_turn": 21,
+            "first_points_turn": 38,
+            "game_over_turn": 100,
+            "rank": 1,
+            "lost": 16,
+            "enemy_lost": 3,
+            "raw_per_turn": 0,
+            "raw_lost": 10,
+            "questions": 1765,
+            "input_tokens": 2489118,
+            "errors": 0,
+            "budget_exhausted": false
+          },
+          "provenance": {
+            "exe": "runs/exes/b133f93-scout-wall.exe",
+            "exe_sha256": "d4de6b914fe87a79",
+            "git_commit": "b133f93",
+            "prompts_sha256": "1842cc876533fd05",
+            "model": "jev-1.14.0",
+            "game_args": [
+              "--controllers",
+              "jev,classic",
+              "--world",
+              "0",
+              "--seed",
+              "42",
+              "--turns",
+              "100"
+            ],
+            "mock": false,
+            "start": 1793658240.47635,
+            "end": 1793660358.342651,
+            "exit_code": 0
+          }
+        },
+        {
+          "summary": {
+            "name": "b18-scout-wall-w3-s7",
+            "turns_played": 100,
+            "status": "complete",
+            "mines_max": 3,
+            "units": 9,
+            "buildings": 4,
+            "points": 0,
+            "worth": 232,
+            "enemy_points": 0,
+            "enemy_worth": 1072,
+            "enemy_units": 25,
+            "enemy_buildings": 60,
+            "first_factory_turn": 17,
+            "second_mine_turn": 58,
+            "game_over_turn": 100,
+            "rank": 2,
+            "lost": 41,
+            "enemy_lost": 10,
+            "raw_per_turn": 0,
+            "raw_lost": 12,
+            "questions": 1728,
+            "input_tokens": 2602474,
+            "errors": 0,
+            "budget_exhausted": false
+          },
+          "provenance": {
+            "exe": "runs/exes/b133f93-scout-wall.exe",
+            "exe_sha256": "d4de6b914fe87a79",
+            "git_commit": "b133f93",
+            "prompts_sha256": "1842cc876533fd05",
+            "model": "jev-1.14.0",
+            "game_args": [
+              "--controllers",
+              "jev,classic",
+              "--world",
+              "3",
+              "--seed",
+              "7",
+              "--turns",
+              "100"
+            ],
+            "mock": false,
+            "start": 1793658240.537992,
+            "end": 1793660154.136012,
+            "exit_code": 0
+          }
+        },
+        {
+          "summary": {
+            "name": "b18-scout-wall-w6-s13",
+            "turns_played": 100,
+            "status": "complete",
+            "mines_max": 1,
+            "units": 13,
+            "buildings": 12,
+            "points": 0,
+            "worth": 424,
+            "enemy_points": 0,
+            "enemy_worth": 1291,
+            "enemy_units": 33,
+            "enemy_buildings": 66,
+            "first_factory_turn": 17,
+            "game_over_turn": 100,
+            "rank": 2,
+            "lost": 1,
+            "enemy_lost": 1,
+            "raw_per_turn": 0,
+            "raw_lost": 24,
+            "questions": 1539,
+            "input_tokens": 2545861,
+            "errors": 0,
+            "budget_exhausted": false
+          },
+          "provenance": {
+            "exe": "runs/exes/b133f93-scout-wall.exe",
+            "exe_sha256": "d4de6b914fe87a79",
+            "git_commit": "b133f93",
+            "prompts_sha256": "1842cc876533fd05",
+            "model": "jev-1.14.0",
+            "game_args": [
+              "--controllers",
+              "jev,classic",
+              "--world",
+              "6",
+              "--seed",
+              "13",
+              "--turns",
+              "100"
+            ],
+            "mock": false,
+            "start": 1793658240.537965,
+            "end": 1793659799.279498,
+            "exit_code": 0
+          }
+        }
+      ]
+    },
+    {
+      "label": "b19-economy",
+      "turn_limit": 60,
+      "games": [
+        {
+          "summary": {
+            "name": "b19-economy-w0-s42",
+            "turns_played": 60,
+            "status": "complete",
+            "mines_max": 4,
+            "units": 14,
+            "buildings": 28,
+            "points": 0,
+            "worth": 536,
+            "enemy_points": 0,
+            "enemy_worth": 558,
+            "enemy_units": 14,
+            "enemy_buildings": 26,
+            "first_factory_turn": 21,
+            "second_mine_turn": 28,
+            "game_over_turn": 60,
+            "rank": 2,
+            "lost": 0,
+            "enemy_lost": 1,
+            "raw_per_turn": 16,
+            "raw_lost": 34,
+            "questions": 725,
+            "input_tokens": 1271008,
+            "errors": 0,
+            "budget_exhausted": false
+          },
+          "provenance": {
+            "exe": "runs/exes/b19-economy.exe",
+            "exe_sha256": "7826e0d751ebce43",
+            "git_commit": "491ac5d-dirty",
+            "prompts_sha256": "a2ff3202b64c187a",
+            "model": "jev-1.14.0",
+            "game_args": [
+              "--controllers",
+              "jev,classic",
+              "--world",
+              "0",
+              "--seed",
+              "42",
+              "--turns",
+              "60"
+            ],
+            "mock": false,
+            "start": 1793708442.822301,
+            "end": 1793709508.2385862,
+            "exit_code": 0
+          }
+        },
+        {
+          "summary": {
+            "name": "b19-economy-w3-s7",
+            "turns_played": 60,
+            "status": "complete",
+            "mines_max": 3,
+            "units": 11,
+            "buildings": 15,
+            "points": 0,
+            "worth": 364,
+            "enemy_points": 0,
+            "enemy_worth": 631,
+            "enemy_units": 15,
+            "enemy_buildings": 30,
+            "first_factory_turn": 17,
+            "second_mine_turn": 40,
+            "game_over_turn": 60,
+            "rank": 2,
+            "lost": 10,
+            "enemy_lost": 3,
+            "raw_per_turn": 0,
+            "raw_lost": 0,
+            "questions": 487,
+            "input_tokens": 967199,
+            "errors": 0,
+            "budget_exhausted": false
+          },
+          "provenance": {
+            "exe": "runs/exes/b19-economy.exe",
+            "exe_sha256": "7826e0d751ebce43",
+            "git_commit": "491ac5d-dirty",
+            "prompts_sha256": "a2ff3202b64c187a",
+            "model": "jev-1.14.0",
+            "game_args": [
+              "--controllers",
+              "jev,classic",
+              "--world",
+              "3",
+              "--seed",
+              "7",
+              "--turns",
+              "60"
+            ],
+            "mock": false,
+            "start": 1793708442.8315022,
+            "end": 1793709194.646327,
+            "exit_code": 0
+          }
+        },
+        {
+          "summary": {
+            "name": "b19-economy-w6-s13",
+            "turns_played": 60,
+            "status": "complete",
+            "mines_max": 2,
+            "units": 23,
+            "buildings": 20,
+            "points": 2,
+            "worth": 624,
+            "enemy_points": 0,
+            "enemy_worth": 676,
+            "enemy_units": 20,
+            "enemy_buildings": 38,
+            "first_factory_turn": 17,
+            "second_mine_turn": 39,
+            "first_points_turn": 59,
+            "game_over_turn": 60,
+            "rank": 1,
+            "lost": 1,
+            "enemy_lost": 0,
+            "raw_per_turn": 12,
+            "raw_lost": 24,
+            "questions": 867,
+            "input_tokens": 1448001,
+            "errors": 0,
+            "budget_exhausted": false
+          },
+          "provenance": {
+            "exe": "runs/exes/b19-economy.exe",
+            "exe_sha256": "7826e0d751ebce43",
+            "git_commit": "491ac5d-dirty",
+            "prompts_sha256": "a2ff3202b64c187a",
+            "model": "jev-1.14.0",
+            "game_args": [
+              "--controllers",
+              "jev,classic",
+              "--world",
+              "6",
+              "--seed",
+              "13",
+              "--turns",
+              "60"
+            ],
+            "mock": false,
+            "start": 1793708442.771735,
+            "end": 1793709541.4406898,
+            "exit_code": 0
+          }
+        }
+      ]
+    }
+  ]
+}
