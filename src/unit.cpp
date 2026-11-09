@@ -25,7 +25,95 @@
 
 #include <cstring>
 
+#include "commandline.hpp"
 #include "resource_manager.hpp"
+
+/* Stand-in animation tables for hidden games, which do not load MAX.RES (see CommandLine_IsHidden()).
+ *
+ * The D_* resources of MAX.RES hold the sprite frame layout of each unit: base frame and frame count of the body,
+ * turret, firing and connector sprites plus the turret mount offsets. Nothing is drawn in a hidden game, but a few
+ * frame counts pace game logic: an explosion or smoke puff lives until its frame index reaches the last frame (the
+ * destroyed unit is cleared at the half way frame), a bridge raises and lowers frame by frame and spinning turrets
+ * and animated buildings cycle through their frames. A zero frame count would keep an explosion alive forever.
+ *
+ * The layouts follow the frame offsets the engine hardcodes elsewhere: 8 directions per sprite set, turret frames
+ * after the body frames and firing frames after those. The frame counts are plausible values, not the original
+ * data. The turret mount offsets only position sprites on screen and stay zero.
+ */
+struct Unit_HiddenFrameInfo {
+    ResourceID data;
+    int16_t image_base;
+    int16_t image_count;
+    int16_t turret_image_base;
+    int16_t turret_image_count;
+    int16_t firing_image_base;
+    int16_t firing_image_count;
+};
+
+static constexpr Unit_HiddenFrameInfo Unit_HiddenFrameInfoTable[] = {
+    // buildings: idle and working frame
+    {D_LRGBLD, 0, 2, 0, 0, 0, 0},
+    {D_SMLBLD, 0, 2, 0, 0, 0, 0},
+    {D_MINING, 0, 2, 0, 0, 0, 0},
+    {D_RADAR, 0, 8, 0, 0, 0, 0},
+    // ground cover and rubble
+    {D_DEFALT, 0, 1, 0, 0, 0, 0},
+    {D_LRGSLA, 0, 1, 0, 0, 0, 0},
+    {D_LRGRBL, 0, 1, 0, 0, 0, 0},
+    {D_SMLRBL, 0, 1, 0, 0, 0, 0},
+    {D_BRIDGE, 0, 3, 0, 0, 0, 0},
+    // gun emplacements: base, turret directions, turret firing directions
+    {D_FIXED, 0, 1, 8, 8, 16, 8},
+    {D_ANTIAI, 0, 1, 8, 8, 16, 8},
+    // mobile units: 8 directions, amphibious units keep their water frames at 8
+    {D_MOBILE, 0, 8, 0, 0, 0, 0},
+    {D_AMPHIB, 0, 8, 0, 0, 16, 8},
+    {D_SUB, 0, 8, 0, 0, 0, 0},
+    {D_FIRING, 0, 8, 0, 0, 8, 8},
+    {D_COMMAN, 0, 8, 0, 0, 104, 8},
+    {D_INFANT, 0, 8, 0, 0, 104, 8},
+    {D_TANK, 0, 8, 8, 8, 16, 8},
+    {D_SP_FLK, 0, 8, 8, 8, 16, 8},
+    {D_ESCORT, 0, 8, 8, 8, 16, 8},
+    {D_BATTLS, 0, 8, 8, 8, 16, 8},
+    {D_ALTANK, 0, 8, 8, 8, 16, 8},
+    {D_SCANNR, 0, 8, 8, 8, 0, 0},
+    {D_AWAC, 0, 8, 8, 8, 0, 0},
+    // projectiles
+    {D_TORPDO, 0, 8, 0, 0, 0, 0},
+    {D_ALNMSL, 0, 8, 0, 0, 0, 0},
+    {D_ALNPBL, 0, 8, 0, 0, 0, 0},
+    // effects, the frame count is their lifetime in animation steps
+    {D_UEXPLD, 0, 16, 0, 0, 0, 0},
+    {D_BEXPLD, 0, 16, 0, 0, 0, 0},
+    {D_SEXPLD, 0, 8, 0, 0, 0, 0},
+    {D_SMOKE, 0, 8, 0, 0, 0, 0},
+    {D_BUBBLE, 0, 8, 0, 0, 0, 0},
+};
+
+static FrameInfo Unit_GetHiddenFrameInfo(ResourceID data) {
+    FrameInfo file{};
+
+    for (const auto& entry : Unit_HiddenFrameInfoTable) {
+        if (entry.data == data) {
+            file.image_base = entry.image_base;
+            file.image_count = entry.image_count;
+            file.turret_image_base = entry.turret_image_base;
+            file.turret_image_count = entry.turret_image_count;
+            file.firing_image_base = entry.firing_image_base;
+            file.firing_image_count = entry.firing_image_count;
+
+            return file;
+        }
+    }
+
+    SDL_Log("Hidden mode: no stand-in animation table for %s.", ResourceManager_GetResourceID(data));
+
+    // a single frame ends every frame sequence at once
+    file.image_count = 1;
+
+    return file;
+}
 
 Unit::Unit(uint32_t flags, ResourceID sprite, ResourceID shadow, ResourceID data, ResourceID flics_animation,
            ResourceID portrait, ResourceID icon, ResourceID armory_portrait, uint8_t land_type, CargoType cargo_type,
@@ -69,6 +157,9 @@ Unit::Unit(uint32_t flags, ResourceID sprite, ResourceID shadow, ResourceID data
                           file.angle_offsets[i].y = static_cast<int8_t>(data_buffer[8 + i * 2 + 1]);
                       }
                   }
+
+              } else if (CommandLine_IsHidden()) {
+                  file = Unit_GetHiddenFrameInfo(data);
               }
           }
 

@@ -114,6 +114,11 @@ void WindowManager_ResizeSimpleImage(ResourceID id, double scale) {
     int32_t data_size;
     Rect map_frame;
 
+    // missing in hidden games, which do not load MAX.RES
+    if (!image) {
+        return;
+    }
+
     image = WindowManager_RescaleSimpleImage(image, GFX_SCALE_DENOMINATOR / scale);
     data_size = image->width * image->height + sizeof(image->width) * 4;
     ResourceManager_Realloc(id, reinterpret_cast<uint8_t*>(image), data_size);
@@ -541,6 +546,9 @@ int32_t WindowManager_Init() {
             WindowManager_SystemPalette = new (std::nothrow) uint8_t[PALETTE_STRIDE * PALETTE_SIZE];
             memset(WindowManager_SystemPalette, 0, PALETTE_STRIDE * PALETTE_SIZE);
 
+            // the first image palette sets the same buffer, hidden games that load no images need it all the same
+            WindowManager_ColorPalette = Color_GetColorPalette();
+
             result = EXIT_CODE_NO_ERROR;
 
         } else {
@@ -833,6 +841,10 @@ struct ImageSimpleHeader* WindowManager_RescaleSimpleImage(struct ImageSimpleHea
     uint8_t* buffer;
     uint8_t* image_data;
     uint8_t* scaled_image_data;
+
+    if (!image) {
+        return nullptr;
+    }
 
     width = image->width;
     height = image->height;

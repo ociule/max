@@ -21,6 +21,7 @@
 
 #include "window.hpp"
 
+#include "commandline.hpp"
 #include "resource_manager.hpp"
 #include "window_manager.hpp"
 
@@ -39,7 +40,16 @@ Window::Window(ResourceID id) : window_id(0), flags(WINDOW_NO_FLAGS), resource_i
     int32_t result;
 
     result = ResourceManager_ReadImageHeader(id, &image_header);
-    SDL_assert(result == 1);
+
+    if (!result) {
+        /* Hidden games do not load MAX.RES. Every background image fits the screen, a screen sized window keeps
+         * the controls a menu places at fixed offsets inside its window buffer.
+         */
+        SDL_assert(CommandLine_IsHidden());
+
+        image_header.width = WindowManager_WindowWidth;
+        image_header.height = WindowManager_WindowHeight;
+    }
 
     ulx = (WindowManager_WindowWidth - image_header.width) / 2;
     uly = (WindowManager_WindowHeight - image_header.height) / 2;
@@ -55,7 +65,14 @@ Window::Window(ResourceID id, uint8_t win_id)
 
     window = WindowManager_GetWindow(win_id);
     result = ResourceManager_ReadImageHeader(id, &image_header);
-    SDL_assert(result == 1);
+
+    if (!result) {
+        // see above, the background image fits the window it is centered on
+        SDL_assert(CommandLine_IsHidden());
+
+        image_header.width = window->window.lrx - window->window.ulx;
+        image_header.height = window->window.lry - window->window.uly;
+    }
 
     width = image_header.width;
     height = image_header.height;

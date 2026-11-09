@@ -373,7 +373,10 @@ void menu_draw_game_over_screen(WindowInfo* window, const int32_t* const team_pl
 
         image = reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_ReadResource(ENDARM));
 
-        WindowManager_DecodeSimpleImage(image, 273, 480 - image->height, true, window);
+        // missing in hidden games, which do not load MAX.RES
+        if (image) {
+            WindowManager_DecodeSimpleImage(image, 273, 480 - image->height, true, window);
+        }
 
         delete[] image;
     }

@@ -23,7 +23,7 @@ set(ENET_HASH 5f9f7b3fca0131f07f647d3a2d71180d)
 set(ENET_HASH_TYPE MD5)
 
 set(MINIUPNP_VERSION miniupnpc_2_3_3)
-set(MINIUPNP_FILE miniupnpc-${MINIUPNP_VERSION}.tar.gz)
+set(MINIUPNP_FILE miniupnp-${MINIUPNP_VERSION}.tar.gz)
 set(MINIUPNP_URI https://github.com/miniupnp/miniupnp/archive/refs/tags/${MINIUPNP_VERSION}.tar.gz)
 set(MINIUPNP_HASH 75676be7c25847fdafd45880d2b08469)
 set(MINIUPNP_HASH_TYPE MD5)

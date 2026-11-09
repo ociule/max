@@ -21,6 +21,7 @@
 
 #include "button.hpp"
 
+#include "commandline.hpp"
 #include "enums.hpp"
 #include "sound_manager.hpp"
 #include "text.hpp"
@@ -422,6 +423,13 @@ void Button::SetCaption(const char* caption, Rect* r, FontColor color_up, FontCo
     int32_t width;
     int32_t height;
     int32_t uly_caption;
+
+    /* Hidden games do not load MAX.RES, the button images are one pixel stand-ins (see Image) that a caption would
+     * overflow. Nothing is shown anyway.
+     */
+    if (CommandLine_IsHidden()) {
+        return;
+    }
 
     Allocate();
 

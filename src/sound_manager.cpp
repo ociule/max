@@ -25,6 +25,7 @@
 #include <iostream>
 #include <new>
 
+#include "commandline.hpp"
 #include "enums.hpp"
 #include "game_manager.hpp"
 #include "gfx.hpp"
@@ -160,6 +161,16 @@ SoundManager::SoundManager() noexcept {
 
     engineConfig.channels = SOUND_MANAGER_CHANNELS;
     engineConfig.sampleRate = SOUND_MANAGER_SAMPLE_RATE;
+
+    // a hidden game has no sound, do not open an audio device, the game runs as if the system had none
+    if (CommandLine_IsHidden()) {
+        m_engine = nullptr;
+        m_is_audio_enabled = false;
+
+        SDL_Log("Hidden mode: audio is disabled.");
+
+        return;
+    }
 
     m_engine = new (std::nothrow) ma_engine;
 
@@ -494,6 +505,10 @@ void SoundManager::PlaySfx(UnitInfo* const unit, const Unit::SfxType sound, cons
 }
 
 void SoundManager::UpdateSfxPosition() noexcept {
+    if (!m_is_audio_enabled) {
+        return;
+    }
+
     const int32_t grid_center_x = (GameManager_MapView.ulx + GameManager_MapView.lrx) / 2;
     const int32_t grid_center_y = (GameManager_MapView.uly + GameManager_MapView.lry) / 2;
 
@@ -539,6 +554,10 @@ void SoundManager::UpdateSfxPosition(UnitInfo* const unit) noexcept {
 }
 
 void SoundManager::HaltSfxPlayback(const bool disable) noexcept {
+    if (!m_is_audio_enabled) {
+        return;
+    }
+
     if (disable) {
         for (auto it = m_sfx_group->GetSamples()->Begin(), it_end = m_sfx_group->GetSamples()->End(); it != it_end;
              ++it) {
@@ -632,6 +651,10 @@ void SoundManager::FreeAllSamples() noexcept {
 }
 
 void SoundManager::SetVolume(const int32_t type, const float volume) noexcept {
+    if (!m_is_audio_enabled) {
+        return;
+    }
+
     if (type == AUDIO_TYPE_MUSIC) {
         ma_sound_group_set_volume(m_music_group->GetGroup(), volume);
 

@@ -411,7 +411,8 @@ void Paths_DrawShots(WindowInfo* window, int32_t grid_x, int32_t grid_y, int32_t
 
             image = reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_LoadResource(IL_SHOTS));
 
-            if (image->height <= size) {
+            // missing in hidden games, which do not load MAX.RES
+            if (image && image->height <= size) {
                 shots = std::min(size / image->width, shots);
 
                 if (shots > 0) {

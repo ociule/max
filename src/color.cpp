@@ -21,6 +21,7 @@
 
 #include "color.h"
 
+#include "commandline.hpp"
 #include "cursor.hpp"
 #include "resource_manager.hpp"
 
@@ -101,7 +102,14 @@ int32_t Color_Init(void) {
         auto fp{ResourceManager_OpenFileResource("COLOR.PAL", ResourceType_GameData)};
 
         if (!fp) {
-            result = 0;
+            if (CommandLine_IsHidden()) {
+                // COLOR.PAL comes with the original game assets, a hidden game draws nothing and keeps a black palette
+                Color_Inited = 1;
+                result = 1;
+
+            } else {
+                result = 0;
+            }
 
         } else {
             fread(Color_ColorPalette, sizeof(Color_ColorPalette), 1, fp);

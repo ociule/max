@@ -29,10 +29,12 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "access.hpp"
 #include "assertmenu.hpp"
 #include "attributes.hpp"
+#include "commandline.hpp"
 #include "crash_context.hpp"
 #include "crash_reporter.hpp"
 #include "cursor.hpp"
@@ -212,6 +214,19 @@ static void ResourceManager_InitBasePath();
 static void ResourceManager_InitPrefPath();
 static void ResourceManager_InitGameDataPath();
 
+/* A modal message box waits for a click that never comes in a hidden game, the window is not even shown. Hidden games
+ * log the message instead. The caller still exits the game after a fatal error.
+ */
+static void ResourceManager_ShowMessageBox(SDL_MessageBoxFlags flags, const char* title, const char* message,
+                                           SDL_Window* window) {
+    if (CommandLine_IsHidden()) {
+        SDL_Log("%s: %s", title, message);
+
+    } else {
+        SDL_ShowSimpleMessageBox(flags, title, message, window);
+    }
+}
+
 static inline std::filesystem::path ResourceManager_GetFileResourcePathPrefix(ResourceType type) {
     auto path{ResourceManager_FilePathGameData};
 
@@ -252,49 +267,53 @@ bool ResourceManager_GetBasePath(std::filesystem::path& path) {
         }
 
     } else if (!std::strcmp(platform, "Linux")) {
+        /* The first folder that holds the port's resources wins. Testing the folders for PATCHES.RES rather than
+         * for existence matters: SDL_GetPrefPath() creates the XDG_DATA_HOME folder, so a run from a build or
+         * portable folder would otherwise settle on an empty preferences folder and never look any further.
+         */
+        std::vector<std::filesystem::path> candidates;
         const auto xdg_data_dirs = SDL_getenv("XDG_DATA_DIRS");
 
         if (xdg_data_dirs) {
             std::istringstream data(xdg_data_dirs);
             for (std::string xdg_data_dir; std::getline(data, xdg_data_dir, ':');) {
-                local_path = (std::filesystem::path(xdg_data_dir) / "max-port/").lexically_normal();
-
-                if (std::filesystem::exists(local_path, ec) && !ec) {
-                    break;
-                }
+                candidates.push_back((std::filesystem::path(xdg_data_dir) / "max-port/").lexically_normal());
             }
         }
 
-        if (!std::filesystem::exists(local_path, ec) || ec) {
-            local_path = std::filesystem::path("/usr/share/max-port/").lexically_normal();
+        candidates.push_back(std::filesystem::path("/usr/share/max-port/").lexically_normal());
+        candidates.push_back(std::filesystem::path("/usr/local/share/max-port/").lexically_normal());
 
-            if (!std::filesystem::exists(local_path, ec) || ec) {
-                local_path = std::filesystem::path("/usr/local/share/max-port/").lexically_normal();
+        const auto xdg_data_home = SDL_getenv("XDG_DATA_HOME");
 
-                if (!std::filesystem::exists(local_path, ec) || ec) {
-                    const auto xdg_data_home = SDL_getenv("XDG_DATA_HOME");
-
-                    if (xdg_data_home) {
-                        local_path = (std::filesystem::path(xdg_data_home) / "max-port/").lexically_normal();
-                    }
+        if (xdg_data_home) {
+            candidates.push_back((std::filesystem::path(xdg_data_home) / "max-port/").lexically_normal());
+        }
 
 #if SDL_VERSION_ATLEAST(2, 0, 1)
-                    if (!std::filesystem::exists(local_path, ec) || ec) {
-                        // SDL_GetPrefPath may fail if SDL is not initialized yet
-                        auto pref_path = SDL_GetPrefPath("", "max-port");
+        // SDL_GetPrefPath may fail if SDL is not initialized yet
+        auto pref_path = SDL_GetPrefPath("", "max-port");
 
-                        if (pref_path) {
-                            local_path = std::filesystem::path(pref_path).lexically_normal();
-                            SDL_free(pref_path);
-                        }
-                    }
+        if (pref_path) {
+            candidates.push_back(std::filesystem::path(pref_path).lexically_normal());
+            SDL_free(pref_path);
+        }
 #endif /* SDL_VERSION_ATLEAST(2, 0, 1) */
-                }
-            }
+
+        const auto base_path = SDL_GetBasePath();
+
+        if (base_path) {
+            candidates.push_back(std::filesystem::path(base_path).lexically_normal());
         }
 
-        if (!std::filesystem::exists(local_path, ec) || ec) {
-            local_path = std::filesystem::current_path(ec).lexically_normal();
+        candidates.push_back(std::filesystem::current_path(ec).lexically_normal());
+
+        for (const auto& candidate : candidates) {
+            if (std::filesystem::exists(candidate / "PATCHES.RES", ec) && !ec) {
+                local_path = candidate;
+
+                break;
+            }
         }
     }
 
@@ -394,14 +413,14 @@ bool ResourceManager_GetGameDataPath(std::filesystem::path& path) {
 
 void ResourceManager_InitBasePath() {
     if (!ResourceManager_GetBasePath(ResourceManager_FilePathGameBase)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), _(2690), nullptr);
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), _(2690), nullptr);
         exit(EXIT_FAILURE);
     }
 }
 
 void ResourceManager_InitPrefPath() {
     if (!ResourceManager_GetPrefPath(ResourceManager_FilePathGamePref)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), _(416b), nullptr);
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), _(416b), nullptr);
         exit(EXIT_FAILURE);
 
     } else {
@@ -415,6 +434,20 @@ void ResourceManager_InitPrefPath() {
 
 void ResourceManager_InitGameDataPath() {
     std::filesystem::path path;
+
+    /* A hidden game runs without the original game assets, there is nobody to answer the first run setup and the
+     * game data folder only has to hold the world maps (WRL files). Use the configured folder when it exists, the
+     * base folder otherwise.
+     */
+    if (CommandLine_IsHidden()) {
+        if (!ResourceManager_GetGameDataPath(path)) {
+            path = ResourceManager_FilePathGameBase;
+        }
+
+        ResourceManager_FilePathGameData = path;
+
+        return;
+    }
 
     /* The configured folder must actually hold the game assets. The stored path may point to an
      * ejected CD-ROM or a moved installation, and a fresh install defaults to the working
@@ -469,7 +502,7 @@ void ResourceManager_InitResources() {
 
 void ResourceManager_InitSDL() {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), _(438a), nullptr);
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), _(438a), nullptr);
         SDL_Log("%s", _(438a));
         SDL_Log("%s.", SDL_GetError());
 
@@ -487,7 +520,7 @@ void ResourceManager_TestMemory() {
 
         message.Sprintf(200, _(d0a2), ResourceManager_MinimumMemory, memory);
 
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), message.GetCStr(), nullptr);
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), message.GetCStr(), nullptr);
         SDL_Log("%s", message.GetCStr());
 
         SDL_Quit();
@@ -505,7 +538,7 @@ void ResourceManager_TestDiskSpace() {
 
         message.Sprintf(200, _(efb0), static_cast<float>(ResourceManager_MinimumDiskSpace) / (1024 * 1024));
 
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, _(b7f4), message.GetCStr(), nullptr);
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_WARNING, _(b7f4), message.GetCStr(), nullptr);
         SDL_Log("%s", message.GetCStr());
     }
 }
@@ -596,7 +629,7 @@ void ResourceManager_InitResourceHandler() {
         }
 
     } else {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Insufficient memory for resource tables.",
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Insufficient memory for resource tables.",
                                  nullptr);
         exit(EXIT_FAILURE);
     }
@@ -606,24 +639,31 @@ void ResourceManager_PreloadPatches() {
     std::filesystem::path path{"./"};
 
     if (!ResourceManager_GetBasePath(path)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to obtain application base directory.",
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to obtain application base directory.",
                                  nullptr);
         exit(EXIT_FAILURE);
     }
 
     if (ResourceManager_BuildResourceTable(
             (ResourceManager_GetFileResourcePath("PATCHES.RES", path)).lexically_normal()) != EXIT_CODE_NO_ERROR) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to load PATCHES.RES.", nullptr);
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to load PATCHES.RES.", nullptr);
         exit(EXIT_FAILURE);
     }
 }
 
 void ResourceManager_LoadMaxResources() {
+    // a hidden game never reads graphics, sounds or animation tables, see CommandLine_IsHidden()
+    if (CommandLine_IsHidden()) {
+        SDL_Log("Hidden mode: MAX.RES is not loaded.");
+
+        return;
+    }
+
     if (ResourceManager_BuildResourceTable(
             (ResourceManager_GetFileResourcePath("MAX.RES", ResourceManager_FilePathGameData)).lexically_normal()) !=
         EXIT_CODE_NO_ERROR) {
         /// \todo Convert to translated string
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to load MAX.RES.", nullptr);
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to load MAX.RES.", nullptr);
         SDL_Log("%s", "Failed to load MAX.RES.");
 
         SDL_Quit();
@@ -1513,7 +1553,7 @@ void ResourceManager_InitLanguageManager() {
     std::filesystem::path path{"./"};
 
     if (!ResourceManager_GetBasePath(path)) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to obtain application base directory.",
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to obtain application base directory.",
                                  nullptr);
         exit(EXIT_FAILURE);
     }
@@ -1524,7 +1564,7 @@ void ResourceManager_InitLanguageManager() {
         ResourceManager_LanguageManager->SetLanguage(ResourceManager_GetSystemLocale());
 
     } else {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to load `language.json` asset.",
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, "M.A.X. Error", "Failed to load `language.json` asset.",
                                  nullptr);
         exit(EXIT_FAILURE);
     }
@@ -1597,7 +1637,7 @@ void ResourceManager_InitSettings() {
         }
 
     } else {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), "Failed to load settings definitions.", nullptr);
+        ResourceManager_ShowMessageBox(SDL_MESSAGEBOX_ERROR, _(cf05), "Failed to load settings definitions.", nullptr);
         exit(EXIT_FAILURE);
     }
 }

@@ -244,6 +244,8 @@ int32_t CommandLine_Parse(int argc, char* argv[]) {
 
 bool CommandLine_IsGame() { return CommandLine_Values.is_game; }
 
+bool CommandLine_IsHidden() { return CommandLine_Values.hidden; }
+
 static SDL_AssertState SDLCALL CommandLine_AssertionHandler(const SDL_AssertData* data, void* userdata) {
     // nobody can answer a dialog in a hidden game
     SDL_Log("Command line: assertion failed at %s (%s:%d): %s", data->function, data->filename, data->linenum,

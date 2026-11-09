@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <new>
 
+#include "commandline.hpp"
 #include "resource_manager.hpp"
 
 Image::Image(int16_t ulx, int16_t uly, int16_t width, int16_t height)
@@ -38,7 +39,25 @@ Image::Image(ResourceID id, int16_t ulx, int16_t uly) {
     struct ImageSimpleHeader* sprite;
 
     sprite = reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_LoadResource(id));
-    SDL_assert(sprite);
+
+    if (!sprite) {
+        /* Hidden games do not load MAX.RES. A one pixel image keeps buttons and the code that copies, blends or
+         * writes images working without special cases. Like the resource cache the pixel outlives the image: the
+         * window system keeps pointers to the image data of registered buttons, and buttons replace their images.
+         */
+        static uint8_t Image_PlaceholderPixel[1];
+
+        SDL_assert(CommandLine_IsHidden());
+
+        this->ulx = std::max<int16_t>(ulx, 0);
+        this->uly = std::max<int16_t>(uly, 0);
+        width = 1;
+        height = 1;
+        data = Image_PlaceholderPixel;
+        allocated = false;
+
+        return;
+    }
 
     if (ulx < 0) {
         this->ulx = sprite->ulx;

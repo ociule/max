@@ -39,6 +39,14 @@ int32_t CommandLine_Parse(int argc, char* argv[]);
 bool CommandLine_IsGame();
 
 /**
+ * \brief Returns true if --hidden was given: no window, no sound and no original game assets.
+ *
+ * A hidden game never opens MAX.RES. Graphics, sounds, movies and the unit animation tables are not loaded, every
+ * consumer of those assets must cope with their absence. Valid from the start of main(), before any initialization.
+ */
+bool CommandLine_IsHidden();
+
+/**
  * \brief Starts the custom game described by the arguments and returns when it is over.
  */
 void CommandLine_RunGame();

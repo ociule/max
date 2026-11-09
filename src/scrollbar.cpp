@@ -35,6 +35,12 @@ uint16_t EventScrollbarChange::GetEventId() const { return EVENTS_GET_EVENT_ID(S
 
 void LoadHorizontalBar(uint8_t* buffer, int32_t width, int32_t capacity, int32_t height, ResourceID id) {
     struct ImageSimpleHeader* sprite = reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_LoadResource(id));
+
+    // missing in hidden games, which do not load MAX.RES
+    if (!sprite) {
+        return;
+    }
+
     uint8_t* sprite_data = &sprite->transparent_color;
     uint8_t* data = &sprite_data[sprite->width - height];
     const uint8_t transparent_color = sprite->transparent_color;
@@ -55,6 +61,12 @@ void LoadHorizontalTape(uint8_t* buffer, int32_t full2, int32_t length, int32_t 
     if (width > 0) {
         struct ImageSimpleHeader* sprite =
             reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_LoadResource(id));
+
+        // missing in hidden games, which do not load MAX.RES
+        if (!sprite) {
+            return;
+        }
+
         uint8_t* sprite_data = &sprite->transparent_color;
 
         buf_to_buf(sprite_data, width, length, sprite->width, buffer, full2);
@@ -65,6 +77,12 @@ void LoadVerticalBar(uint8_t* buffer, int32_t width, int32_t capacity, int32_t h
     if (capacity > 0) {
         struct ImageSimpleHeader* sprite =
             reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_LoadResource(id));
+
+        // missing in hidden games, which do not load MAX.RES
+        if (!sprite) {
+            return;
+        }
+
         uint8_t* sprite_data = &sprite->transparent_color;
         const uint8_t transparent_color = sprite->transparent_color;
 

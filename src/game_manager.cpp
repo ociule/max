@@ -2248,6 +2248,11 @@ void GameManager_DrawDisplayPanel(int32_t control_id, const char* text, int32_t 
         struct ImageSimpleHeader* image =
             reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_LoadResource(control->resource_id));
 
+        // missing in hidden games, which do not load MAX.RES
+        if (!image) {
+            return;
+        }
+
         buf_to_buf(&image->transparent_color, image->width, image->height, image->width, control->image->GetData(),
                    image->width);
 
@@ -3577,8 +3582,10 @@ bool GameManager_InitPopupButtons(UnitInfo* unit) {
     main_map_window = WindowManager_GetWindow(WINDOW_MAIN_MAP);
     popups_window = WindowManager_GetWindow(WINDOW_POPUP_BUTTONS);
 
+    // the button images are missing in hidden games, which do not load MAX.RES
     if (unit->GetOrder() != ORDER_DISABLE && GameManager_IsInsideMapView(unit) &&
-        (!(unit->flags & MOBILE_LAND_UNIT) || unit->GetOrderState() != ORDER_STATE_UNIT_READY)) {
+        (!(unit->flags & MOBILE_LAND_UNIT) || unit->GetOrderState() != ORDER_STATE_UNIT_READY) &&
+        ResourceManager_LoadResource(UNTBTN_U)) {
         GameManager_PopupButtons.popup_count = 0;
         unit->popup->init(unit, &GameManager_PopupButtons);
 
@@ -7868,6 +7875,11 @@ void GameManager_MenuInitButtons(bool mode) {
 
         image = reinterpret_cast<struct ImageSimpleHeader*>(
             ResourceManager_LoadResource(static_cast<ResourceID>(R_ENDT_D + i)));
+
+        // missing in hidden games, which do not load MAX.RES
+        if (!image) {
+            continue;
+        }
 
         wininfo.id = window->id;
         wininfo.buffer = &image->transparent_color;

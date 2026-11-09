@@ -449,7 +449,8 @@ void DrawMap_RenderStatusDisplay(UnitInfo* unit, int32_t ulx, int32_t uly, int32
 
         image = reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_LoadResource(IL_DSBLD));
 
-        if (image->width <= width - ulx && image->height <= height - uly) {
+        // missing in hidden games, which do not load MAX.RES
+        if (image && image->width <= width - ulx && image->height <= height - uly) {
             WindowManager_DecodeSimpleImage(image, (width + ulx - image->width) / 2, (height + uly - image->height) / 2,
                                             true, window);
         }
@@ -466,7 +467,8 @@ void DrawMap_RenderStatusDisplay(UnitInfo* unit, int32_t ulx, int32_t uly, int32
         if (unit->speed) {
             image_speed = reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_LoadResource(IL_SPEED));
 
-            if (image_speed->height > height - uly) {
+            // missing in hidden games, which do not load MAX.RES
+            if (!image_speed || image_speed->height > height - uly) {
                 return;
             }
 
@@ -477,7 +479,8 @@ void DrawMap_RenderStatusDisplay(UnitInfo* unit, int32_t ulx, int32_t uly, int32
             if (unit->shots > 0) {
                 image_shots = reinterpret_cast<struct ImageSimpleHeader*>(ResourceManager_LoadResource(IL_SHOTS));
 
-                if (image_shots->height > height - uly) {
+                // missing in hidden games, which do not load MAX.RES
+                if (!image_shots || image_shots->height > height - uly) {
                     return;
                 }
 

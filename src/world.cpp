@@ -24,6 +24,7 @@
 #include <SDL3/SDL.h>
 
 #include "color.h"
+#include "commandline.hpp"
 #include "drawloadbar.hpp"
 #include "gfx.hpp"
 #include "resource_manager.hpp"
@@ -46,16 +47,23 @@ World::World(ResourceID resource_id)
     m_minimap_window_offset.y = 0;
 
     char* resource_name = reinterpret_cast<char*>(ResourceManager_ReadResource(resource_id));
+    std::string filename;
 
-    if (!resource_name) {
+    if (resource_name) {
+        filename = resource_name;
+
+        delete[] resource_name;
+
+    } else if (CommandLine_IsHidden()) {
+        // MAX.RES maps the world resource to its file name. A hidden game does not load it, the planet resource
+        // names are the file names of the original game (SNOW_1 is SNOW_1.WRL).
+        filename = std::string(ResourceManager_GetResourceID(resource_id)) + ".WRL";
+
+    } else {
         SDL_Log("World: Failed to resolve ResourceID %d to filename.", resource_id);
 
         return;
     }
-
-    auto filename = std::string(resource_name);
-
-    delete[] resource_name;
 
     auto path_prefix = ResourceManager_FilePathGameData;
 
