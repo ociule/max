@@ -17,6 +17,6 @@ live-game promotion gate. Test a generated copy with:
 python3 test/run-production-preview-checks.py --suite jev-attack --attack-candidate
 ```
 
-Use `HANDOVER-2026-11-02.md` and `tools/jev_prompt_changelog.md` for decisions and
+Use `tools/jev_prompt_changelog.md` for decisions and
 limitations. Do not infer strength improvements from a single stochastic batch
 or promote a change solely because its scenario score rises.
