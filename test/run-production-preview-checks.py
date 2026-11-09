@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build/windows-hotkeys')
     parser.add_argument('--assets-dir', type=Path, default=ROOT / 'runs/base')
-    parser.add_argument('--suite', choices=['production-preview', 'jev-attack', 'jev-exits', 'jev-links', 'jev-economy'], default='production-preview')
+    parser.add_argument('--suite', choices=['production-preview', 'jev-attack', 'jev-exits', 'jev-links', 'jev-economy', 'policy'], default='production-preview')
     parser.add_argument('--attack-candidate', action='store_true',
                         help='test the saved attack-approach experiment in a generated source copy')
     args = parser.parse_args()
@@ -30,6 +30,7 @@ def main():
         'jev-exits': ('RuntimeJevExitsChecks', 'jev_exits_runtime.cpp'),
         'jev-links': ('RuntimeJevLinksChecks', 'jev_links_runtime.cpp'),
         'jev-economy': ('RuntimeJevEconomyChecks', 'jev_economy_runtime.cpp'),
+        'policy': ('RuntimePolicyChecks', 'policy_runtime.cpp'),
     }[args.suite]
     output.mkdir(parents=True, exist_ok=True)
     if not args.run_only:

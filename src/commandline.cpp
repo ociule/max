@@ -56,7 +56,7 @@ static CommandLine_Options CommandLine_Values;
 
 static const char* const CommandLine_TeamNames[PLAYER_TEAM_MAX - 1] = {"red", "green", "blue", "gray"};
 
-static const char* const CommandLine_ControllerNames[] = {"classic", "none", "jev"};
+static const char* const CommandLine_ControllerNames[] = {"classic", "none", "jev", "policy"};
 
 static const char* const CommandLine_Usage =
     "Usage: max-port [options]\n"
@@ -66,7 +66,8 @@ static const char* const CommandLine_Usage =
     "                     Missing teams are none. Default: computer,computer\n"
     "  --controllers LIST computer player of red, green, blue and gray: classic, none (does nothing)\n"
     "                     or jev (moves its land units with the Jev decision model, see\n"
-    "                     tools/jev_bridge.py). Missing teams are classic. Default: classic\n"
+    "                     tools/jev_bridge.py), or policy (external full-state controller, see\n"
+    "                     tools/policy_bridge.py). Missing teams are classic. Default: classic\n"
     "  --world N          planet, 0 to 23, in the order of the planet menu. Default: 0\n"
     "  --opponent N       computer skill, 0 (clueless) to 5 (god). Default: 2 (average)\n"
     "  --play-mode MODE   turn-based or simultaneous. Default: turn-based\n"
@@ -150,7 +151,7 @@ static bool CommandLine_ParseControllers(const std::string& text, AiControllerTy
         const std::string name = text.substr(start, end - start);
         bool found = false;
 
-        for (uint8_t type = AI_CONTROLLER_CLASSIC; type <= AI_CONTROLLER_JEV; ++type) {
+        for (uint8_t type = AI_CONTROLLER_CLASSIC; type <= AI_CONTROLLER_POLICY; ++type) {
             if (name == CommandLine_ControllerNames[type]) {
                 controllers[team] = static_cast<AiControllerType>(type);
                 found = true;
@@ -237,6 +238,15 @@ int32_t CommandLine_Parse(int argc, char* argv[]) {
         }
 
         options.is_game = true;
+    }
+
+    if (options.play_mode != PLAY_MODE_TURN_BASED) {
+        for (const auto controller : options.controllers) {
+            if (controller == AI_CONTROLLER_POLICY) {
+                std::fputs("The experimental policy controller currently requires --play-mode turn-based.\n", stderr);
+                return EXIT_FAILURE;
+            }
+        }
     }
 
     return -1;

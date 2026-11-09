@@ -27,6 +27,7 @@
 #include "game_manager.hpp"
 #include "jevai.hpp"
 #include "noneai.hpp"
+#include "policyai.hpp"
 #include "units_manager.hpp"
 
 static std::array<ClassicAi, PLAYER_TEAM_MAX - 1> AiController_ClassicTeams{
@@ -41,11 +42,17 @@ static std::array<JevAi, PLAYER_TEAM_MAX - 1> AiController_JevTeams{JevAi(PLAYER
 static std::array<AiControllerType, PLAYER_TEAM_MAX - 1> AiController_Types{
     AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC, AI_CONTROLLER_CLASSIC};
 
+static std::array<PolicyAi, PLAYER_TEAM_MAX - 1> AiController_PolicyTeams{
+    PolicyAi(PLAYER_TEAM_RED), PolicyAi(PLAYER_TEAM_GREEN), PolicyAi(PLAYER_TEAM_BLUE), PolicyAi(PLAYER_TEAM_GRAY)};
+
 AiController* AiController_Get(uint16_t team) {
     AiController* result;
 
     if (team < AiController_Types.size() && UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER) {
         switch (AiController_Types[team]) {
+            case AI_CONTROLLER_POLICY: {
+                result = &AiController_PolicyTeams[team];
+            } break;
             case AI_CONTROLLER_NONE: {
                 result = &AiController_NoneTeams[team];
             } break;

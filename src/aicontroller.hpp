@@ -79,6 +79,8 @@ enum AiControllerType : uint8_t {
     AI_CONTROLLER_NONE,
     /// Moves the team's mobile land units with the Jev decision model.
     AI_CONTROLLER_JEV,
+    /// An external policy receives player observations and issues engine commands.
+    AI_CONTROLLER_POLICY,
 };
 
 /**
