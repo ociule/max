@@ -32,6 +32,24 @@ UnitInfo* Add(ResourceID type, Complex* network, UnitOrderType order) {
     UnitsManager_StationaryUnits.PushBack(*unit);
     return unit.Get();
 }
+
+Point ClearSite() {
+    for (int y = 4; y < ResourceManager_MapSize.y - 12; ++y) {
+        for (int x = 4; x < ResourceManager_MapSize.x - 12; ++x) {
+            bool clear = true;
+            for (int dx = 0; dx < 8 && clear; ++dx) {
+                for (int dy = 0; dy < 8 && clear; ++dy) {
+                    clear = Access_GetSurfaceType(x + dx, y + dy) == SURFACE_TYPE_LAND &&
+                            Access_IsAccessible(MININGST, PLAYER_TEAM_RED, x + dx, y + dy,
+                                                AccessModifier_SameClassBlocks);
+                }
+            }
+            if (clear) return Point(x + 3, y + 3);
+        }
+    }
+    Check(false, "Find clear construction test ground");
+    return Point();
+}
 }
 
 void RuntimeJevEconomyChecks() {
@@ -43,7 +61,13 @@ void RuntimeJevEconomyChecks() {
     Check(Scripter::RunScript(ResourceManager_GetMissionManager()->GetGameRulesHandler()->GetInterpreter(),
                              Scripter::LoadDefaultGameRules(), arguments, results, &error),
           "Use unrestricted game production rules instead of the training mission's restricted menu");
+    for (auto it = UnitsManager_StationaryUnits.Begin(); it != UnitsManager_StationaryUnits.End(); ++it) {
+        if ((*it).team == PLAYER_TEAM_RED) (*it).hits = 0;
+    }
     JevAi ai(PLAYER_TEAM_RED);
+
+    SmartPointer<Complex> turret_network(new Complex(29999));
+    Add(GUNTURRT, turret_network.Get(), ORDER_SENTRY);
 
     SmartPointer<Complex> network(new Complex(30000));
     auto mine = Add(MININGST, network.Get(), ORDER_POWER_OFF);
@@ -90,6 +114,45 @@ void RuntimeJevEconomyChecks() {
     ai.BalanceEconomy();
     Check(dry_mine->GetOrder() == ORDER_POWER_OFF && dry_generator->GetOrder() == ORDER_POWER_OFF,
           "A network without fuel deposits or inventory cannot invent a recovery");
+
+    const Point site = ClearSite();
+    auto constructor = UnitsManager_DeployUnit(CONSTRCT, PLAYER_TEAM_RED, nullptr, site.x, site.y, 0);
+    constructor->SetOrder(ORDER_AWAIT);
+    constructor->SetOrderState(ORDER_STATE_EXECUTING_ORDER);
+    constructor->storage = 60;
+    mine->storage = 25;
+    Check(ai.GetEconomyComplex() == network.Get(), "An isolated turret does not replace the mining base's network");
+    const auto state = ai.GetState(constructor.Get());
+    Check(state.at("base").at("raw").get<int>() == 25,
+          "Construction questions report real mining-base materials instead of the turret's empty network");
+    ai.m_options.clear();
+    ai.AddBuildOptions(constructor.Get());
+    bool offered_build = false;
+    for (const auto& option : ai.m_options) {
+        if (option.action != JevAi::Action::BUILD) continue;
+        offered_build = true;
+        Check(option.build_rate >= 1, "Every construction option executes an explicit advertised speed");
+    }
+    Check(offered_build, "Funded Constructor has legal construction choices");
+    constructor->storage = 6;
+    ai.m_options.clear();
+    ai.AddBuildOptions(constructor.Get());
+    for (const auto& option : ai.m_options) {
+        Check(option.action != JevAi::Action::BUILD || option.data.at("cost").get<int>() <= 6,
+              "A Constructor with six materials is not offered a twenty-four-material mine");
+    }
+    ai.StartBuilding(constructor.Get(), MININGST, site, 1);
+    Check(constructor->storage == 6 && constructor->GetOrder() == ORDER_AWAIT &&
+              constructor->GetBuildList().GetCount() == 0,
+          "StartBuilding rejects an unaffordable or stale choice before issuing any order");
+    constructor->storage = 20;
+    ai.StartBuilding(constructor.Get(), MININGST, site, 4);
+    Check(constructor->GetOrder() == ORDER_AWAIT && constructor->GetBuildList().GetCount() == 0,
+          "An unaffordable faster row is rejected using the engine's adaptive cost calculation");
+    constructor->storage = 60;
+    ai.StartBuilding(constructor.Get(), MININGST, site);
+    Check(constructor->GetBuildRate() == 1 && constructor->GetOrder() == ORDER_BUILD,
+          "A normal-speed build with full cargo stays normal speed instead of silently doubling");
 
     report << "PASS all " << checks << " checks" << std::endl;
     std::exit(0);

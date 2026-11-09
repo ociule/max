@@ -551,6 +551,35 @@ bool JevAi::GetBasePosition(Point& position) const {
     return false;
 }
 
+Complex* JevAi::GetEconomyComplex() const {
+    // A detached turret can precede the base in the unit list. Prefer the network with the most living mines,
+    // then the most raw storage; a stopped mining network still counts so its recovery facts remain visible.
+    Complex* best = nullptr;
+    std::pair<int32_t, int32_t> best_score{-1, -1};
+    std::vector<Complex*> seen;
+    for (auto it = UnitsManager_StationaryUnits.Begin(), end = UnitsManager_StationaryUnits.End(); it != end; ++it) {
+        Complex* complex = (*it).GetComplex();
+        if ((*it).team != m_team || (*it).hits == 0 || !complex ||
+            std::find(seen.begin(), seen.end(), complex) != seen.end()) {
+            continue;
+        }
+        seen.push_back(complex);
+        int32_t mines = 0;
+        for (auto other = UnitsManager_StationaryUnits.Begin(); other != end; ++other) {
+            mines += (*other).team == m_team && (*other).hits > 0 && (*other).GetComplex() == complex &&
+                     (*other).GetUnitType() == MININGST;
+        }
+        Cargo materials, capacity;
+        complex->GetCargoInfo(materials, capacity);
+        const std::pair<int32_t, int32_t> score{mines, capacity.raw};
+        if (score > best_score) {
+            best = complex;
+            best_score = score;
+        }
+    }
+    return best;
+}
+
 int32_t JevAi::GetDistanceToOwnBuilder(Point point) const {
     int32_t nearest = -1;
 
@@ -1645,13 +1674,9 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
     Cargo base_capacity;
     bool enemies_seen = false;
 
-    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
-         ++it) {
-        if ((*it).team == m_team && (*it).GetComplex()) {
-            spare_power = (*it).GetComplex()->power;
-            (*it).GetComplex()->GetCargoInfo(base_stock, base_capacity);
-            break;
-        }
+    if (Complex* complex = GetEconomyComplex()) {
+        spare_power = complex->power;
+        complex->GetCargoInfo(base_stock, base_capacity);
     }
 
     // as the classic AI does: power needed by all buildings, also those being built, against all generators
@@ -1788,6 +1813,9 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
         for (const Point site : sites) {
             const int32_t turns = BuildMenu_GetTurnsToBuild(unit_type, m_team);
             const int32_t cost = turns * rate;
+            if (cost > builder->storage) {
+                continue;
+            }
             const bool covers_builder = (site.x == builder->grid_x || site.x + 1 == builder->grid_x) &&
                                         (site.y == builder->grid_y || site.y + 1 == builder->grid_y);
             std::string facts = "build a " + JevAi_GetTypeName(unit_type) + " at " + JevAi_FormatPoint(site) + ": " +
@@ -1998,6 +2026,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
             m_options.push_back(
                 {"b" + std::to_string(m_options.size()), Action::BUILD, site, unit_type, nullptr, facts, score, data});
+            m_options.back().build_rate = 1;
 
             // the faster rows of the build menu, when the cargo pays for them: the engine's own turns and cost
             int32_t normal_turns;
@@ -2623,11 +2652,11 @@ json JevAi::GetState(UnitInfo* unit) const {
 
     // Production questions describe this factory's network, not an arbitrary base.
     const bool is_factory = JevAi_IsFactory(unit->GetUnitType());
-    Complex* local_complex = is_factory ? unit->GetComplex() : nullptr;
+    Complex* local_complex = is_factory ? unit->GetComplex() : GetEconomyComplex();
 
     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
          ++it) {
-        if ((*it).team == m_team && (*it).GetComplex() && (!is_factory || (*it).GetComplex() == local_complex)) {
+        if ((*it).team == m_team && (*it).hits > 0 && local_complex && (*it).GetComplex() == local_complex) {
             Cargo materials;
             Cargo capacity;
 
@@ -2708,24 +2737,24 @@ bool JevAi::Ask(UnitInfo* unit, const char* instructions) {
 }
 
 void JevAi::StartBuilding(UnitInfo* builder, ResourceID unit_type, Point site, int32_t build_rate) {
+    build_rate = build_rate > 0 ? build_rate : 1;
+    if (!(builder->flags & STATIONARY)) {
+        int32_t turns;
+        const int32_t cost = builder->GetTurnsToBuild(unit_type, build_rate, &turns);
+        if (cost > builder->storage) {
+            SDL_Log("Jev %s: %s cannot start %s: needs %d materials, carries %d.", GetTeamName(),
+                    JevAi_GetUnitName(builder).c_str(), JevAi_GetTypeName(unit_type).c_str(), cost, builder->storage);
+            return;
+        }
+    }
     // same sequence as the classic TaskCreateBuilding and TaskCreateUnit
     SmartObjectArray<ResourceID> build_list = builder->GetBuildList();
 
     build_list.Clear();
     build_list.PushBack(&unit_type);
 
-    // the speed Jev chose; without one, the classic rule: a builder with a full cargo builds at double speed. The
-    // engine lowers the speed each turn to what the cargo still pays for.
-    if (build_rate > 0) {
-        builder->SetBuildRate(build_rate);
-
-    } else if (!(builder->flags & STATIONARY) &&
-               builder->storage >= builder->GetBaseValues()->GetAttribute(ATTRIB_STORAGE) - 2) {
-        builder->SetBuildRate(2);
-
-    } else {
-        builder->SetBuildRate(1);
-    }
+    // Execute the advertised row, including normal speed when the builder happens to carry a full cargo.
+    builder->SetBuildRate(build_rate);
 
     builder->move_to_grid_x = site.x;
     builder->move_to_grid_y = site.y;
@@ -3001,23 +3030,18 @@ void JevAi::BeginTurn() {
     RememberEnemies();
 
     // raw materials mined while the base storage is full are lost
-    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
-         ++it) {
-        if ((*it).team == m_team && (*it).GetComplex()) {
-            Cargo materials;
-            Cargo capacity;
-            Cargo mining;
-            Cargo mining_capacity;
+    if (Complex* complex = GetEconomyComplex()) {
+        Cargo materials;
+        Cargo capacity;
+        Cargo mining;
+        Cargo mining_capacity;
 
-            (*it).GetComplex()->GetCargoInfo(materials, capacity);
-            (*it).GetComplex()->GetCargoMining(mining, mining_capacity);
+        complex->GetCargoInfo(materials, capacity);
+        complex->GetCargoMining(mining, mining_capacity);
 
-            if (capacity.raw > 0 && materials.raw >= capacity.raw) {
-                ++m_raw_full_turns;
-                m_raw_lost += mining.raw;
-            }
-
-            break;
+        if (capacity.raw > 0 && materials.raw >= capacity.raw) {
+            ++m_raw_full_turns;
+            m_raw_lost += mining.raw;
         }
     }
 
@@ -3052,7 +3076,7 @@ void JevAi::BeginTurn() {
                   m_links.end());
 
     std::string buildings;
-    Complex* complex = nullptr;
+    Complex* complex = GetEconomyComplex();
 
     for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
          ++it) {
