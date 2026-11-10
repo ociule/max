@@ -54,9 +54,15 @@ def divergence(base, new):
     return f'none in {min(len(base_turns), len(new_turns))} team turns'
 
 
-def speed(game_dir):
+def speed(game_dir, lines):
+    """Wall time, turns and seconds per turn. The game's own clock when stats.jsonl has the game line (the log
+    polling of bench.py is too coarse for fast games), else the logged turn times."""
     result = json.loads((game_dir / 'result.json').read_text())
     times = {int(k): v for k, v in result['turn_times'].items()}
+    games = [line for line in lines if line['type'] == 'game']
+    if games and games[-1].get('turns'):
+        game = games[-1]
+        return result['wall'], game['turns'], (game['wall_s'] - game['setup_s']) / game['turns']
     per_turn = (times[max(times)] - times[1]) / (len(times) - 1) if len(times) > 1 else float('nan')
     return result['wall'], len(times), per_turn
 
@@ -77,7 +83,7 @@ def main():
     for name in names:
         base, new = load(base_dir / name), load(new_dir / name)
         for label, folder, lines in (('base', base_dir, base), ('new', new_dir, new)):
-            wall, turns, per_turn = speed(folder / name)
+            wall, turns, per_turn = speed(folder / name, lines)
             h = handicap(lines)
             rows.append((label, wall, turns, per_turn, h))
             print(f"{name:6} {label:4} {wall:8.1f} {turns:5} {per_turn:7.2f} {h['cutoffs_per_1000']:12.3f} "

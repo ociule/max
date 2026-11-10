@@ -21,6 +21,7 @@
 
 #include "svga.h"
 
+#include "commandline.hpp"
 #include "cursor.hpp"
 #include "gamestats.hpp"
 #include "gnw.h"
@@ -48,6 +49,7 @@ static uint64_t Svga_BackgroundTimer;
 static int32_t sdl_win_init_flag;
 static bool Svga_PaletteChanged;
 static bool Svga_RenderDirty;
+static bool Svga_IsHidden;
 
 static int32_t Svga_ScreenWidth;
 static int32_t Svga_ScreenHeight;
@@ -193,6 +195,8 @@ int32_t Svga_Init(void) {
                                           SDL_LOGICAL_PRESENTATION_LETTERBOX)) {
         SDL_Log("SDL_SetRenderLogicalPresentation failed: %s.", SDL_GetError());
     }
+
+    Svga_IsHidden = CommandLine_IsHidden();
 
     sdlWindowSurface = SDL_CreateSurface(Svga_ScreenWidth, Svga_ScreenHeight, Svga_DisplayPixelFormat);
     sdlPaletteSurface = SDL_CreateSurface(Svga_ScreenWidth, Svga_ScreenHeight, SDL_PIXELFORMAT_INDEX8);
@@ -344,6 +348,11 @@ static inline void svga_stage_render(void) { Svga_RenderDirty = true; }
 
 void Svga_Blit(uint8_t* srcBuf, uint32_t srcW, uint32_t srcH, uint32_t subX, uint32_t subY, uint32_t subW,
                uint32_t subH, uint32_t dstX, uint32_t dstY) {
+    // the window of a hidden game is never shown, the screen buffer does not need to reach it
+    if (Svga_IsHidden) {
+        return;
+    }
+
     SDL_assert(sdlPaletteSurface && SDL_BYTESPERPIXEL(sdlPaletteSurface->format) == sizeof(uint8_t));
 
     svga_stage_index8_to_palette(srcBuf, srcW, srcH, subX, subY, subW, subH, dstX, dstY);
@@ -408,6 +417,11 @@ void Svga_BlitFinalize(uint32_t dstX, uint32_t dstY, uint32_t width, uint32_t he
 }
 
 void Svga_BackgroundProcess(void) {
+    // the window of a hidden game is never shown, presenting it only costs time
+    if (Svga_IsHidden) {
+        return;
+    }
+
     uint32_t elapsed = timer_elapsed_time(Svga_BackgroundTimer);
     bool should_present = Svga_RenderDirty || elapsed >= TIMER_FPS_TO_MS(Svga_DisplayRefreshRate);
 

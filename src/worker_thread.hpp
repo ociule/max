@@ -69,7 +69,8 @@ public:
         CompletedJob(std::unique_ptr<TJob> j, TResult r) : job(std::move(j)), result(std::move(r)) {}
     };
 
-    WorkerThread() : m_thread(nullptr), m_queue_lock(0), m_exit_requested(false), m_running(false) {}
+    WorkerThread()
+        : m_thread(nullptr), m_work_available(nullptr), m_queue_lock(0), m_exit_requested(false), m_running(false) {}
 
     ~WorkerThread() { Stop(); }
 
@@ -91,12 +92,16 @@ public:
         }
 
         m_exit_requested.store(false, std::memory_order_release);
+        m_work_available = SDL_CreateSemaphore(0);
         m_thread = SDL_CreateThread(ThreadFunction, thread_name, this);
 
         if (m_thread) {
             m_running = true;
             return true;
         }
+
+        SDL_DestroySemaphore(m_work_available);
+        m_work_available = nullptr;
 
         return false;
     }
@@ -114,10 +119,16 @@ public:
 
         m_exit_requested.store(true, std::memory_order_release);
 
+        // wake the worker if it waits for work
+        SDL_SignalSemaphore(m_work_available);
+
         if (m_thread) {
             SDL_WaitThread(m_thread, nullptr);
             m_thread = nullptr;
         }
+
+        SDL_DestroySemaphore(m_work_available);
+        m_work_available = nullptr;
 
         m_running = false;
 
@@ -139,6 +150,9 @@ public:
         SDL_LockSpinlock(&m_queue_lock);
         m_pending_jobs.push_back(std::move(job));
         SDL_UnlockSpinlock(&m_queue_lock);
+
+        // one signal per job, the worker starts on it at once instead of at its next poll
+        SDL_SignalSemaphore(m_work_available);
     }
 
     /**
@@ -205,6 +219,11 @@ private:
         while (!m_exit_requested.load(std::memory_order_acquire)) {
             std::unique_ptr<TJob> job;
 
+            /* Sleep until a job is submitted. The timeout is only a safety net, every Submit() and Stop() signals.
+             * A signal whose job Stop() discarded just finds the queue empty.
+             */
+            SDL_WaitSemaphoreTimeout(m_work_available, 100);
+
             // Try to get a job - minimize lock duration
             SDL_LockSpinlock(&m_queue_lock);
             if (!m_pending_jobs.empty()) {
@@ -238,15 +257,12 @@ private:
                 SDL_LockSpinlock(&m_queue_lock);
                 m_completed_jobs.emplace_back(std::move(job), std::move(result));
                 SDL_UnlockSpinlock(&m_queue_lock);
-
-            } else {
-                // No work available, sleep briefly to avoid busy-waiting
-                SDL_Delay(1);
             }
         }
     }
 
     SDL_Thread* m_thread;
+    SDL_Semaphore* m_work_available;
     mutable SDL_SpinLock m_queue_lock;
     std::deque<std::unique_ptr<TJob>> m_pending_jobs;
     std::deque<CompletedJob> m_completed_jobs;

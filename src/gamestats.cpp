@@ -63,8 +63,9 @@ static const char* const GameStats_BudgetNames[GAMESTATS_BUDGET_COUNT] = {
     "reminders_start",   "reminders", "path_dispatch", "auto_survey",        "check_assaults", "clear_zone_examine",
     "clear_zone_search", "kill_unit", "retreat",       "search_destination", "update_terrain", "distance_field"};
 
-static const char* const GameStats_TimeNames[GAMESTATS_TIME_COUNT] = {"tick_s", "orders_s", "render_s", "dispatch_s",
-                                                                      "ai_s",   "input_s",  "present_s"};
+static const char* const GameStats_TimeNames[GAMESTATS_TIME_COUNT] = {
+    "tick_s", "orders_s", "render_s", "dispatch_s", "ai_s", "input_s", "present_s", "poll_s", "animation_s",
+    "idle_render_s"};
 
 static void GameStats_Reset(GameStats_Counters& counters) {
     counters = {};

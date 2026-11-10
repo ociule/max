@@ -55,13 +55,16 @@ enum GameStatsBudgetSite : uint8_t {
 
 /// Timed parts of the main loop.
 enum GameStatsTime : uint8_t {
-    GAMESTATS_TIME_TICK,      ///< whole tick, from the tick start to the end of the computer player work
-    GAMESTATS_TIME_ORDERS,    ///< unit orders of the tick
-    GAMESTATS_TIME_RENDER,    ///< map rendering of the tick
-    GAMESTATS_TIME_DISPATCH,  ///< path request preparation and dispatch of the tick
-    GAMESTATS_TIME_AI,        ///< computer player reactions, reminders and end turn checks of the tick
-    GAMESTATS_TIME_INPUT,     ///< input processing between ticks, includes the background processes
-    GAMESTATS_TIME_PRESENT,   ///< presenting the window, part of the input processing
+    GAMESTATS_TIME_TICK,         ///< whole tick, from the tick start to the end of the computer player work
+    GAMESTATS_TIME_ORDERS,       ///< unit orders of the tick
+    GAMESTATS_TIME_RENDER,       ///< map rendering of the tick
+    GAMESTATS_TIME_DISPATCH,     ///< path request preparation and dispatch of the tick
+    GAMESTATS_TIME_AI,           ///< computer player reactions, reminders and end turn checks of the tick
+    GAMESTATS_TIME_INPUT,        ///< input processing between ticks, includes the background processes
+    GAMESTATS_TIME_PRESENT,      ///< presenting the window, wherever it happens
+    GAMESTATS_TIME_POLL,         ///< collecting path results at the top of every loop pass, runs their callbacks
+    GAMESTATS_TIME_ANIMATION,    ///< turn timer display, corner animation and palette color animation of every pass
+    GAMESTATS_TIME_IDLE_RENDER,  ///< map rendering between ticks
     GAMESTATS_TIME_COUNT
 };
 

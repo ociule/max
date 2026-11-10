@@ -62,13 +62,18 @@ for label in sys.argv[1:]:
         r = json.loads(path.read_text())
         times = {int(k): v for k, v in r['turn_times'].items()}
         turns = len(times)
-        # time from the first logged turn to the last: excludes the start up and the game setup
-        spt = (times[max(times)] - times[1]) / (turns - 1) if turns > 1 else float('nan')
+        stats = load_stats(path.parent)
+        if stats and stats.get('turns'):
+            # exact: the game's own clock from the first team turn to the end, the log polling is too coarse for
+            # fast games
+            spt = (stats['wall_s'] - stats['setup_s']) / stats['turns']
+        else:
+            # time from the first logged turn to the last: excludes the start up and the game setup
+            spt = (times[max(times)] - times[1]) / (turns - 1) if turns > 1 else float('nan')
         status = 'CRASH' if r['crashed'] else f"exit {r['exit_code']}"
         ended = r['result'].split(':')[0] if r['result'] else 'no game over line'
         print(f"  {path.parent.name:8} {status:7} wall {r['wall']:7.1f}s turns {turns:3} "
               f"s/turn {spt:5.1f} setup+turn1 {times.get(1, float('nan')):5.1f}s  {ended}")
-        stats = load_stats(path.parent)
         if stats:
             print(f"           {stats_line(stats)}")
         walls.append(r['wall'])

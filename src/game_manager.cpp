@@ -5132,11 +5132,22 @@ bool GameManager_IsTickDue() {
         return true;
     }
 
+    /* Unpaced ticks: the next tick starts as soon as the path searches dispatched so far are done, instead of 1/24 s
+     * after the last one. The game logic counts ticks, not time: units move, explosions burn and the computer
+     * players count their idle ticks per tick, and a computer player gets the same thinking time per tick, because
+     * TickTimer_HaveTimeToThink() counts from the start of the tick. Waiting for the path searches keeps their results
+     * arriving no later in ticks than in paced games. Hidden games have no viewer to pace for, debug builds can
+     * unpace windowed games with the timer_mode setting.
+     */
+    bool unpaced = CommandLine_IsHidden();
+
 #if !defined(NDEBUG)
-    if (!GameManager_TimerMode && !Remote_IsNetworkGame && !ResourceManager_GetPathsManager().HasDispatchedJobs()) {
+    unpaced = unpaced || !GameManager_TimerMode;
+#endif /* !defined(NDEBUG) */
+
+    if (unpaced && !Remote_IsNetworkGame && !ResourceManager_GetPathsManager().HasDispatchedJobs()) {
         return true;
     }
-#endif /* !defined(NDEBUG) */
 
     return false;
 }
@@ -5176,6 +5187,8 @@ bool GameManager_ProcessTick(bool render_screen) {
         GameManager_UpdateDrawBounds();
     }
 
+    const uint64_t animation_start = GameStats_Now();
+
     if (GameManager_SyncTurnTimer()) {
         GameManager_DrawTurnTimer(GameManager_TurnTimerValue);
     }
@@ -5188,10 +5201,16 @@ bool GameManager_ProcessTick(bool render_screen) {
         world->UpdateColorAnimations(time_stamp);
     }
 
+    GameStats_AddTime(GAMESTATS_TIME_ANIMATION, animation_start);
+
     time_stamp = timer_get();
+
+    const uint64_t poll_start = GameStats_Now();
 
     // Always poll path results regardless of frame budget
     ResourceManager_GetPathsManager().PollResults();
+
+    GameStats_AddTime(GAMESTATS_TIME_POLL, poll_start);
 
     if (GameManager_IsTickDue()) {
         if (GameManager_IsCheater && GameManager_PlayMode != PLAY_MODE_UNKNOWN) {
@@ -5256,9 +5275,13 @@ bool GameManager_ProcessTick(bool render_screen) {
         result = true;
 
     } else {
+        const uint64_t idle_render_start = GameStats_Now();
+
         if (render_screen || GameManager_RenderEnable || GameManager_GridOffset.x || GameManager_GridOffset.y) {
             GameManager_RenderMap();
         }
+
+        GameStats_AddTime(GAMESTATS_TIME_IDLE_RENDER, idle_render_start);
 
         if (Remote_IsNetworkGame) {
             Remote_ProcessNetPackets();
