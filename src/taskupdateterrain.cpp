@@ -26,6 +26,7 @@
 #include "access.hpp"
 #include "aiplayer.hpp"
 #include "game_manager.hpp"
+#include "gamestats.hpp"
 #include "reminders.hpp"
 #include "resource_manager.hpp"
 #include "task_manager.hpp"
@@ -49,7 +50,7 @@ uint8_t TaskUpdateTerrain::GetType() const { return TaskType_TaskUpdateTerrain; 
 
 void TaskUpdateTerrain::BeginTurn() {
     while (location.x < ResourceManager_MapSize.x) {
-        if (TickTimer_HaveTimeToThink()) {
+        if (GameStats_Budget(GAMESTATS_BUDGET_UPDATE_TERRAIN, TickTimer_HaveTimeToThink())) {
             AiPlayer_TerrainDistanceField->GetMinimumRange(location, SURFACE_TYPE_LAND);
             AiPlayer_TerrainDistanceField->GetMinimumRange(location, SURFACE_TYPE_WATER);
 

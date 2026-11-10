@@ -23,6 +23,7 @@
 
 #include "access.hpp"
 #include "aiplayer.hpp"
+#include "gamestats.hpp"
 #include "resource_manager.hpp"
 #include "task_manager.hpp"
 #include "taskmove.hpp"
@@ -115,7 +116,7 @@ void TaskRetreat::Search() {
     }
 
     if (damage_potential_map) {
-        while (TickTimer_HaveTimeToThink() || index < 20) {
+        while (GameStats_Budget(GAMESTATS_BUDGET_RETREAT, TickTimer_HaveTimeToThink() || index < 20)) {
             ++steps_in_direction;
 
             if (steps_in_direction >= search_radius) {

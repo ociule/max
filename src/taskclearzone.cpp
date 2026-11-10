@@ -26,6 +26,7 @@
 #include "ailog.hpp"
 #include "aiplayer.hpp"
 #include "game_manager.hpp"
+#include "gamestats.hpp"
 #include "remote.hpp"
 #include "task_manager.hpp"
 #include "taskfindpath.hpp"
@@ -177,7 +178,7 @@ void TaskClearZone::EndTurn() {
 
                 if (state == CLEARZONE_STATE_WAITING) {
                     while (!ExamineZones()) {
-                        if (!TickTimer_HaveTimeToThink()) {
+                        if (!GameStats_Budget(GAMESTATS_BUDGET_CLEAR_ZONE_EXAMINE, TickTimer_HaveTimeToThink())) {
                             state = CLEARZONE_STATE_WAITING;
 
                             RemindTurnEnd(true);
@@ -477,7 +478,8 @@ void TaskClearZone::SearchMap() {
 
     state = CLEARZONE_STATE_SEARCHING_MAP;
 
-    while (zone_squares.GetCount() > 0 && state == CLEARZONE_STATE_SEARCHING_MAP && TickTimer_HaveTimeToThink()) {
+    while (zone_squares.GetCount() > 0 && state == CLEARZONE_STATE_SEARCHING_MAP &&
+           GameStats_Budget(GAMESTATS_BUDGET_CLEAR_ZONE_SEARCH, TickTimer_HaveTimeToThink())) {
         ZoneSquare zone_square(*zone_squares[0]);
 
         zone_squares.Remove(0);

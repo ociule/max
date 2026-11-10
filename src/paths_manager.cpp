@@ -28,6 +28,7 @@
 #include "ai.hpp"
 #include "ailog.hpp"
 #include "aiplayer.hpp"
+#include "gamestats.hpp"
 #include "message_manager.hpp"
 #include "mouseevent.hpp"
 #include "resource_manager.hpp"
@@ -49,7 +50,10 @@ PathsManager::~PathsManager() {
     m_cancelled_job_ids.clear();
 }
 
-void PathsManager::PushBack(PathRequest& object) { m_pending_requests.PushBack(object); }
+void PathsManager::PushBack(PathRequest& object) {
+    ++GameStats_Turn.paths_requested;
+    m_pending_requests.PushBack(object);
+}
 
 void PathsManager::Clear() {
     m_worker.Stop();
@@ -62,7 +66,10 @@ void PathsManager::Clear() {
     m_worker.Start("PathWorker");
 }
 
-void PathsManager::PushFront(PathRequest& object) { m_pending_requests.PushFront(object); }
+void PathsManager::PushFront(PathRequest& object) {
+    ++GameStats_Turn.paths_requested;
+    m_pending_requests.PushFront(object);
+}
 
 void PathsManager::RemoveRequest(PathRequest* path_request) {
     // The smart pointer is required to avoid premature destruction of the held object
@@ -74,6 +81,7 @@ void PathsManager::RemoveRequest(PathRequest* path_request) {
     // Check pending queue first
     for (auto it = m_pending_requests.Begin(), it_end = m_pending_requests.End(); it != it_end; ++it) {
         if (it->Get() == path_request) {
+            ++GameStats_Turn.paths_cancelled;
             protect_request->Cancel();
             m_pending_requests.Remove(it);
 
@@ -88,6 +96,7 @@ void PathsManager::RemoveRequest(PathRequest* path_request) {
             const uint32_t cancelled_job_id = job_id;
 
             m_cancelled_job_ids.insert(cancelled_job_id);
+            ++GameStats_Turn.paths_cancelled;
             protect_request->Cancel();
 
             m_dispatched_requests.erase(cancelled_job_id);
@@ -109,6 +118,7 @@ void PathsManager::RemoveRequest(UnitInfo* unit) {
                   ResourceManager_GetUnit((*it).GetClient()->GetUnitType()).GetSingularName().data());
 
             (*it).Cancel();
+            ++GameStats_Turn.paths_cancelled;
             to_remove_pending.PushBack(*it);
         }
     }
@@ -126,6 +136,7 @@ void PathsManager::RemoveRequest(UnitInfo* unit) {
                   ResourceManager_GetUnit(req->GetClient()->GetUnitType()).GetSingularName().data());
 
             m_cancelled_job_ids.insert(job_id);
+            ++GameStats_Turn.paths_cancelled;
 
             to_remove.push_back(job_id);
             to_cancel.push_back(req);
@@ -152,6 +163,8 @@ void PathsManager::PollResults() {
         if (m_cancelled_job_ids.count(job_id)) {
             AILOG(log, "Discarding cancelled path result for job {}.", job_id);
 
+            ++GameStats_Turn.paths_discarded;
+
             m_cancelled_job_ids.erase(job_id);
 
             continue;
@@ -163,6 +176,8 @@ void PathsManager::PollResults() {
             SmartPointer<PathRequest> request = it->second;
 
             m_dispatched_requests.erase(it);
+
+            GameStats_PathDelivered(completed_job.job->dispatch_tick, completed_job.job->dispatch_ns);
 
             std::optional<PathResult> result = completed_job.result;
             UnitInfo* const client = request->GetClient();
@@ -197,12 +212,15 @@ void PathsManager::PollResults() {
 }
 
 void PathsManager::DispatchJobs() {
+    // path results polled here arrive inside the tick, see GameStats_PathDelivered()
+    GameStats_InDispatch = true;
+
     // Dispatch new jobs from pending queue (as many as time allows)
     while (m_pending_requests.GetCount() > 0) {
         // Process mouse events to keep UI responsive
         MouseEvent::ProcessInput();
 
-        if (!TickTimer_HaveTimeToThink()) {
+        if (!GameStats_Budget(GAMESTATS_BUDGET_PATH_DISPATCH, TickTimer_HaveTimeToThink())) {
             break;
         }
 
@@ -217,8 +235,12 @@ void PathsManager::DispatchJobs() {
         SmartPointer<PathRequest> request = it->Get();
         m_pending_requests.Remove(it);
 
-        PrepareAndDispatchJob(request);
+        if (!PrepareAndDispatchJob(request)) {
+            ++GameStats_Turn.paths_answered_directly;
+        }
     }
+
+    GameStats_InDispatch = false;
 }
 
 bool PathsManager::HasRequest(UnitInfo* unit) const {
@@ -466,6 +488,10 @@ bool PathsManager::PrepareAndDispatchJob(SmartPointer<PathRequest> request) {
     uint32_t job_id = m_next_job_id++;
 
     auto job = std::make_unique<PathWorkerJob>(job_id, request, std::move(context), position);
+
+    job->dispatch_tick = GameStats_TickCount;
+    job->dispatch_ns = GameStats_Now();
+    ++GameStats_Turn.paths_dispatched;
 
     // Track the dispatched request
     m_dispatched_requests[job_id] = request;

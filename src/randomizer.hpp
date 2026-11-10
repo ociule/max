@@ -29,6 +29,12 @@ void Randomizer_SetSeed(const uint32_t seed);
 
 uint32_t Randomizer_GetNext();
 
+/// Number of random numbers drawn since the start, for the game statistics.
+uint64_t Randomizer_GetDrawCount();
+
+/// A hash of the generator state, equal states give equal sequences.
+uint64_t Randomizer_GetStateHash();
+
 template <typename T>
 T Randomizer_Generate(const T value) {
     return static_cast<T>((static_cast<int64_t>(Randomizer_GetNext()) * value) >> 32);

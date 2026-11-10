@@ -31,6 +31,7 @@
 #include "complex.hpp"
 #include "continent.hpp"
 #include "game_manager.hpp"
+#include "gamestats.hpp"
 #include "menu.hpp"
 #include "message_manager.hpp"
 #include "randomizer.hpp"
@@ -2836,6 +2837,8 @@ bool AiPlayer::CheckEndTurn() {
 
             ++end_turn_retry_counter;
 
+            GameStats_EndTurnIdle(end_turn_retry_counter);
+
             if (end_turn_retry_counter >= 10) {
                 if (end_turn_retry_counter != 10 || AreActionsPending()) {
                     if (end_turn_retry_counter != 20) {
@@ -2844,6 +2847,7 @@ bool AiPlayer::CheckEndTurn() {
                                 if (end_turn_retry_counter > 120) {
                                     if (GameManager_PlayMode == PLAY_MODE_TURN_BASED ||
                                         GameManager_GameState == GAME_STATE_9_END_TURN || IsDemoMode()) {
+                                        ++GameStats_Turn.end_turn_by_idle_limit;
                                         GameManager_RefreshOrders(player_team, true);
                                     }
                                 }
@@ -2880,6 +2884,10 @@ bool AiPlayer::CheckEndTurn() {
             }
 
         } else {
+            if (end_turn_retry_counter > 0) {
+                ++GameStats_Turn.end_turn_idle_resets;
+            }
+
             end_turn_retry_counter = 0;
 
             result = false;

@@ -30,6 +30,7 @@
 
 #include "aicontroller.hpp"
 #include "game_manager.hpp"
+#include "gamestats.hpp"
 #include "menu.hpp"
 #include "missionmanager.hpp"
 #include "resource_manager.hpp"
@@ -325,7 +326,11 @@ void CommandLine_RunGame() {
     SDL_Log("Command line: world %d, opponent %d, %s, %d turns, seed %u.", options.world, options.opponent,
             (options.play_mode == PLAY_MODE_TURN_BASED) ? "turn-based" : "simultaneous", options.turns, options.seed);
 
+    GameStats_Init();
+
     GameManager_GameLoop(GAME_STATE_6_GAME_SETUP);
+
+    GameStats_EndGame();
 }
 
 uint32_t CommandLine_GetSeed(uint32_t default_seed) {
@@ -406,6 +411,8 @@ bool CommandLine_LogResult(const WinLoss_Status& status, int32_t turn) {
     }
 
     SDL_Log("Command line: %s", line.c_str());
+
+    GameStats_EndGame();
 
     return true;
 }

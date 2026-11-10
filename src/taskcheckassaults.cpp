@@ -23,6 +23,7 @@
 
 #include "aiattack.hpp"
 #include "ailog.hpp"
+#include "gamestats.hpp"
 #include "reminders.hpp"
 #include "task_manager.hpp"
 #include "taskmove.hpp"
@@ -53,7 +54,7 @@ void TaskCheckAssaults::CheckAssaults() {
     }
 
     for (; unit_iterator != UnitsManager_MobileAirUnits.End(); SelectNext()) {
-        if (TickTimer_HaveTimeToThink()) {
+        if (GameStats_Budget(GAMESTATS_BUDGET_CHECK_ASSAULTS, TickTimer_HaveTimeToThink())) {
             if (EvaluateAssaults()) {
                 AILOG_LOG(log, "Assault check paused.");
 

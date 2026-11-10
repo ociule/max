@@ -26,6 +26,7 @@
 #include "access.hpp"
 #include "ailog.hpp"
 #include "game_manager.hpp"
+#include "gamestats.hpp"
 #include "task_manager.hpp"
 #include "ticktimer.hpp"
 #include "transportermap.hpp"
@@ -82,7 +83,7 @@ bool TaskAutoSurvey::Execute(UnitInfo& unit_) {
             int32_t target_direction =
                 UnitsManager_GetTargetAngle(unit->grid_x - central_site.x, unit->grid_y - central_site.y);
 
-            while (TickTimer_HaveTimeToThink() || loop_count < 20) {
+            while (GameStats_Budget(GAMESTATS_BUDGET_AUTO_SURVEY, TickTimer_HaveTimeToThink() || loop_count < 20)) {
                 ++loop_count;
 
                 position += DIRECTION_OFFSETS[direction];

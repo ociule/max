@@ -109,6 +109,8 @@ void TickTimer_UpdateTimeLimit() noexcept {
 
 uint64_t TickTimer_GetElapsedTime() noexcept { return timer_elapsed_time(TickTimer_LastTimeStamp); }
 
+uint64_t TickTimer_GetTimeLimit() noexcept { return TickTimer_TimeLimit; }
+
 uint64_t TickTimer_GetLastTimeStamp() noexcept { return TickTimer_LastTimeStamp; }
 
 void TickTimer_SetLastTimeStamp(const uint64_t time_stamp) noexcept { TickTimer_LastTimeStamp = time_stamp; }

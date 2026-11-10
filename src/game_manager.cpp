@@ -38,6 +38,7 @@
 #include "cursor.hpp"
 #include "drawmap.hpp"
 #include "flicsmgr.hpp"
+#include "gamestats.hpp"
 #include "gfx.hpp"
 #include "hash.hpp"
 #include "helpmenu.hpp"
@@ -461,6 +462,8 @@ void GameManager_TeamTurnTurnBased(int32_t& game_state) {
          team < PLAYER_TEAM_MAX - 1; ++team) {
         if (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE &&
             UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_ELIMINATED) {
+            GameStats_BeginTeamTurn(team);
+
             if (game_state != GAME_STATE_10_LOAD_GAME) {
                 GameManager_ManageEconomy(team);
             }
@@ -491,6 +494,8 @@ void GameManager_TeamTurnTurnBased(int32_t& game_state) {
                 GameManager_ProgressTurn();
             }
 
+            GameStats_EndTeamTurn(team);
+
             GameManager_GuiSwitchTeam(GameManager_PlayerTeam);
 
             game_state = GAME_STATE_8_IN_GAME;
@@ -501,6 +506,8 @@ void GameManager_TeamTurnTurnBased(int32_t& game_state) {
 
 void GameManager_TeamTurnConcurrent(int32_t& game_state) {
     AILOG(log, "Concurrent team turn.");
+
+    GameStats_BeginTeamTurn(-1);
 
     if (Remote_IsNetworkGame) {
         Remote_WaitBeginTurnAcknowledge();
@@ -568,6 +575,8 @@ void GameManager_TeamTurnConcurrent(int32_t& game_state) {
     }
 
     AILOG_LOG(log, "Getting ready for next turn.  Game status = {}.", GameManager_GameState);
+
+    GameStats_EndTeamTurn(-1);
 
     GameManager_PlayMode = PLAY_MODE_SIMULTANEOUS_MOVES;
 
@@ -2594,9 +2603,15 @@ bool GameManager_OptimizeProduction(uint16_t team, Complex* complex, bool is_pla
 
 void GameManager_ProgressTurn() {
     do {
+        const uint64_t input_start = GameStats_Now();
+
         GameManager_Progress2 = true;
         GameManager_ProcessInput();
+
+        GameStats_AddTime(GAMESTATS_TIME_INPUT, input_start);
     } while (GameManager_Progress1 && GameManager_Progress2);
+
+    ++GameStats_Turn.loop_iterations;
 
     GameManager_ProcessTick(false);
 }
@@ -5057,6 +5072,7 @@ bool GameManager_SyncTurnTimer() {
             GameManager_TurnTimerValue -= seconds_elapsed;
 
             if (GameManager_TurnTimerValue <= 0) {
+                ++GameStats_Turn.end_turn_by_timer;
                 GameManager_UpdateTurnTimer(false, 0);
                 GameManager_RequestMenuExit = true;
             }
@@ -5189,16 +5205,29 @@ bool GameManager_ProcessTick(bool render_screen) {
         TickTimer_SetLastTimeStamp(time_stamp);
         TickTimer_RequestTimeLimitUpdate();
 
+        const uint64_t tick_start = GameStats_Now();
+
+        GameStats_Tick(ResourceManager_GetPathsManager().HasDispatchedJobs());
+
         if (GameManager_GameState != GAME_STATE_11_TURN_ACTIVE) {
             UnitsManager_ProcessOrders();
         }
+
+        GameStats_AddTime(GAMESTATS_TIME_ORDERS, tick_start);
+
+        const uint64_t render_start = GameStats_Now();
 
         if (GameManager_IsTickRenderDue()) {
             GameManager_RenderMap();
         }
 
+        GameStats_AddTime(GAMESTATS_TIME_RENDER, render_start);
+
         if (GameManager_GameState != GAME_STATE_11_TURN_ACTIVE && !UnitsManager_OrdersPending) {
             TickTimer_UpdateTimeLimit();
+            GameStats_TimeLimit(TickTimer_GetTimeLimit());
+
+            uint64_t ai_start = GameStats_Now();
 
             if (GameManager_UpdateFlag) {
                 Ai_CheckReactions();
@@ -5206,10 +5235,23 @@ bool GameManager_ProcessTick(bool render_screen) {
 
             GameManager_UpdateFlag = !GameManager_UpdateFlag;
 
+            GameStats_AddTime(GAMESTATS_TIME_AI, ai_start);
+
+            const uint64_t dispatch_start = GameStats_Now();
+
             ResourceManager_GetPathsManager().DispatchJobs();
+
+            GameStats_AddTime(GAMESTATS_TIME_DISPATCH, dispatch_start);
+
+            ai_start = GameStats_Now();
+
             Ai_CheckReactions();
             Ai_CheckEndTurn();
+
+            GameStats_AddTime(GAMESTATS_TIME_AI, ai_start);
         }
+
+        GameStats_AddTime(GAMESTATS_TIME_TICK, tick_start);
 
         result = true;
 

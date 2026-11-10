@@ -32,6 +32,7 @@
 #include "cargo.hpp"
 #include "cursor.hpp"
 #include "game_manager.hpp"
+#include "gamestats.hpp"
 #include "gfx.hpp"
 #include "hash.hpp"
 #include "message_manager.hpp"
@@ -1558,6 +1559,8 @@ void UnitInfo::AttackUnit(UnitInfo* enemy, int32_t attack_potential, int32_t dir
     int32_t attack_damage = UnitsManager_GetAttackDamage(enemy, this, attack_potential);
 
     if (hits > 0) {
+        GameStats_AttackLanded(enemy->team);
+
         damaged_this_turn = true;
 
         if (!enemy->IsVisibleToTeam(team)) {

@@ -84,6 +84,7 @@
 
 #include "access.hpp"
 #include "aicontroller.hpp"
+#include "gamestats.hpp"
 #include "resource_manager.hpp"
 #include "task_manager.hpp"
 #include "taskupdateterrain.hpp"
@@ -194,7 +195,7 @@ uint32_t TerrainDistanceField::ComputeDistanceToNearestTraversable(std::vector<u
         const uint32_t max_map_distance =
             (m_dimensions.x - 1) * (m_dimensions.x - 1) + (m_dimensions.y - 1) * (m_dimensions.y - 1);
 
-        if (TickTimer_HaveTimeToThink()) {
+        if (GameStats_Budget(GAMESTATS_BUDGET_DISTANCE_FIELD, TickTimer_HaveTimeToThink())) {
             // Expanding ring search: Check cells at increasing distances.
             //
             // The bound has to be re-read on every iteration, because shortest_distance shrinks as anchors are found.

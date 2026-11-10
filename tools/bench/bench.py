@@ -8,12 +8,13 @@ The run folder holds the game binary (--bin is relative to it), PATCHES.RES, the
 game runs with it as the working folder. Make the test map with tools/make_test_map.py --out SNOW_1.WRL --seed 1.
 
 Every game runs in its own XDG_DATA_HOME (<run-dir>/results/<label>/<seed>-<rep>/), so games never share settings
-or logs.
+or logs. --setting SECTION.key=value (repeatable) starts the games with that setting, e.g. DEBUG.timer_mode=0.
 The game log has no timestamps: the runner polls it and stamps each "Turn N" line as it appears, which gives the
 time per turn. results/<label>/<seed>-<rep>/result.json holds the totals, the per turn times and the game over line.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -24,15 +25,53 @@ import time
 from pathlib import Path
 
 RUN = Path.cwd()
+REPO = Path(__file__).resolve().parent.parent.parent
 TURN_RE = re.compile(r'Command line: Turn (\d+):')
 
 
-def run_game(binary, out_dir, seed, turns, extra, timeout):
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as stream:
+        for block in iter(lambda: stream.read(1 << 20), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def git_commit():
+    def git(*args):
+        return subprocess.run(['git', *args], cwd=REPO, capture_output=True, text=True, check=False).stdout.strip()
+
+    return git('rev-parse', '--short', 'HEAD') + ('-dirty' if git('status', '--porcelain', '--untracked-files=no') else '')
+
+
+def parse_settings(pairs):
+    """SECTION.key=value pairs to the settings.json layout, integer values where possible."""
+    settings = {}
+    for pair in pairs:
+        name, _, value = pair.partition('=')
+        section, _, key = name.partition('.')
+        if not key or not value:
+            raise SystemExit(f'--setting {pair}: expected SECTION.key=value')
+        try:
+            value = int(value)
+        except ValueError:
+            pass
+        settings.setdefault(section, {})[key] = value
+    return settings
+
+
+def run_game(binary, out_dir, seed, turns, extra, timeout, settings):
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in ('max-port',):
         target = out_dir / old
         if target.exists():
             subprocess.run(['rm', '-rf', str(target)], check=True)
+
+    if settings:
+        (out_dir / 'max-port').mkdir()
+        # the game fills in the missing settings with their defaults
+        (out_dir / 'max-port' / 'settings.json').write_text(
+            json.dumps({'$schema': 'http://json-schema.org/draft-07/schema#', 'settings': settings}, indent=1))
 
     env = dict(os.environ, XDG_DATA_HOME=str(out_dir))
     env.setdefault('ASAN_OPTIONS', 'detect_leaks=0:alloc_dealloc_mismatch=0')
@@ -46,7 +85,12 @@ def run_game(binary, out_dir, seed, turns, extra, timeout):
     turn_times = {}
     position = 0
     result_line = ''
+    load = []
+    next_load_sample = 0.0
     while True:
+        if time.monotonic() - start >= next_load_sample:
+            load.append([round(time.monotonic() - start, 1), os.getloadavg()[0]])
+            next_load_sample += 30
         finished = game.poll() is not None
         if log.exists():
             with open(log, 'r', errors='replace') as stream:
@@ -73,8 +117,15 @@ def run_game(binary, out_dir, seed, turns, extra, timeout):
     wall = time.monotonic() - start
     crash_dir = out_dir / 'max-port' / 'crashes'
     crashed = crash_dir.exists() and any(crash_dir.iterdir())
+    build = ''
+    if log.exists():
+        for line in log.read_text(errors='replace').splitlines()[:20]:
+            if line.startswith('Build') and ':' in line:
+                build = line.split(':', 1)[1].strip()
     result = {'seed': seed, 'turns': turns, 'args': args, 'exit_code': game.returncode, 'wall': wall,
-              'turns_logged': len(turn_times), 'turn_times': turn_times, 'result': result_line, 'crashed': crashed}
+              'turns_logged': len(turn_times), 'turn_times': turn_times, 'result': result_line, 'crashed': crashed,
+              'binary_sha256': file_sha256(RUN / binary), 'build': build, 'git_commit': git_commit(),
+              'settings': settings, 'load': load}
     (out_dir / 'result.json').write_text(json.dumps(result, indent=1))
     return result
 
@@ -89,12 +140,14 @@ def main():
     parser.add_argument('--turns', type=int, default=100)
     parser.add_argument('--parallel', type=int, default=1)
     parser.add_argument('--timeout', type=float, default=4 * 3600)
+    parser.add_argument('--setting', action='append', default=[], help='SECTION.key=value, repeatable')
     parser.add_argument('extra', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     global RUN
     RUN = Path(args.run_dir).resolve()
     extra = args.extra[1:] if args.extra[:1] == ['--'] else args.extra
 
+    settings = parse_settings(args.setting)
     jobs = [(int(seed), rep) for rep in range(args.reps) for seed in args.seeds.split(',')]
     lock = threading.Lock()
 
@@ -105,7 +158,7 @@ def main():
                     return
                 seed, rep = jobs.pop(0)
             out_dir = RUN / 'results' / args.label / f'{seed}-{rep}'
-            r = run_game(args.bin, out_dir, seed, args.turns, extra, args.timeout)
+            r = run_game(args.bin, out_dir, seed, args.turns, extra, args.timeout, settings)
             with lock:
                 print(f"{args.label} seed {seed} rep {rep}: exit {r['exit_code']} wall {r['wall']:.1f}s "
                       f"turns {r['turns_logged']} crashed {r['crashed']} | {r['result'][:120]}", flush=True)

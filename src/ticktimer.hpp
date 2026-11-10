@@ -29,6 +29,7 @@
 void TickTimer_RequestTimeLimitUpdate() noexcept;
 void TickTimer_UpdateTimeLimit() noexcept;
 [[nodiscard]] uint64_t TickTimer_GetElapsedTime() noexcept;
+[[nodiscard]] uint64_t TickTimer_GetTimeLimit() noexcept;
 [[nodiscard]] uint64_t TickTimer_GetLastTimeStamp() noexcept;
 void TickTimer_SetLastTimeStamp(const uint64_t time_stamp) noexcept;
 

@@ -29,6 +29,31 @@ def describe(values):
     return f'{mean:8.1f} +-{half:6.1f} (sd {stdev:6.1f}, cv {100 * stdev / mean:4.1f}%)'
 
 
+def load_stats(game_dir):
+    """The game line of stats.jsonl (in the game folder or its max-port sub folder), None without statistics."""
+    for path in (game_dir / 'stats.jsonl', game_dir / 'max-port' / 'stats.jsonl'):
+        if path.exists():
+            lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+            games = [line for line in lines if line['type'] == 'game']
+            return games[-1] if games else None
+    return None
+
+
+def stats_line(g):
+    ticks = max(g['ticks'], 1)
+    cutoffs = sum(cutoff for _, cutoff in g['budget_checks_cutoffs'].values())
+    checks = sum(check for check, _ in g['budget_checks_cutoffs'].values())
+    paths = g['paths']
+    process = g.get('process', {})
+    return (f"ms/tick {1000 * g['wall_s'] / ticks:5.1f} ticks {g['ticks']:6} tick work {100 * g['tick_s'] / g['wall_s']:4.1f}% "
+            f"present {100 * g['present_s'] / g['wall_s']:4.1f}% | AI cutoffs {cutoffs}/{checks} "
+            f"reminders left {g['reminders_left_at_cutoffs']} | paths {paths['dispatched']} "
+            f"lag ticks mean {paths['latency_ticks_mean']:.2f} max {paths['latency_ticks_max']} "
+            f"ms mean {paths['latency_ms_mean']:.1f} | ends idle {g['end_turn']['by_idle_limit']} "
+            f"timer {g['end_turn']['by_timer']} | cpu {process.get('user_s', 0):.0f}s "
+            f"rss {process.get('peak_rss_kb', 0) / 1024:.0f}MB")
+
+
 for label in sys.argv[1:]:
     games = sorted(Path(label).glob('*/result.json'))
     print(f'== {label}: {len(games)} games')
@@ -43,6 +68,9 @@ for label in sys.argv[1:]:
         ended = r['result'].split(':')[0] if r['result'] else 'no game over line'
         print(f"  {path.parent.name:8} {status:7} wall {r['wall']:7.1f}s turns {turns:3} "
               f"s/turn {spt:5.1f} setup+turn1 {times.get(1, float('nan')):5.1f}s  {ended}")
+        stats = load_stats(path.parent)
+        if stats:
+            print(f"           {stats_line(stats)}")
         walls.append(r['wall'])
         if turns == r['turns']:
             full.append(r['wall'])

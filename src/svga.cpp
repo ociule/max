@@ -22,6 +22,7 @@
 #include "svga.h"
 
 #include "cursor.hpp"
+#include "gamestats.hpp"
 #include "gnw.h"
 #include "input.h"
 #include "resource_manager.hpp"
@@ -411,6 +412,8 @@ void Svga_BackgroundProcess(void) {
     bool should_present = Svga_RenderDirty || elapsed >= TIMER_FPS_TO_MS(Svga_DisplayRefreshRate);
 
     if (should_present) {
+        const uint64_t present_start = GameStats_Now();
+
         Svga_BackgroundTimer = timer_get();
         Svga_RenderDirty = false;
 
@@ -422,6 +425,9 @@ void Svga_BackgroundProcess(void) {
         if (!SDL_RenderPresent(sdlRenderer)) {
             SDL_Log("SDL_RenderPresent failed: %s.", SDL_GetError());
         }
+
+        GameStats_AddTime(GAMESTATS_TIME_PRESENT, present_start);
+        ++GameStats_Turn.presents;
     }
 }
 

@@ -28,6 +28,7 @@
 #include "aiplayer.hpp"
 #include "builder.hpp"
 #include "game_manager.hpp"
+#include "gamestats.hpp"
 #include "missionmanager.hpp"
 #include "reminders.hpp"
 #include "resource_manager.hpp"
@@ -288,7 +289,7 @@ bool TaskManager::ExecuteReminders() {
     if (normal_reminders.GetCount() + priority_reminders.GetCount() > 0) {
         AILOG(log, "Execute reminders");
 
-        if (TickTimer_HaveTimeToThink()) {
+        if (GameStats_Budget(GAMESTATS_BUDGET_REMINDERS_START, TickTimer_HaveTimeToThink())) {
             SmartPointer<Reminder> reminder;
             int32_t reminders_executed = 0;
 
@@ -313,16 +314,28 @@ bool TaskManager::ExecuteReminders() {
                 }
 
                 ++reminders_executed;
+                ++GameStats_Turn.reminders;
 
                 reminder->Execute();
 
-                if (!TickTimer_HaveTimeToThink()) {
+                const bool have_time = TickTimer_HaveTimeToThink();
+
+                // the loop ends by itself when no reminder is left, only a stop with reminders left is a cutoff
+                const uint32_t reminders_left = normal_reminders.GetCount() + priority_reminders.GetCount();
+
+                if (reminders_left > 0) {
+                    GameStats_Budget(GAMESTATS_BUDGET_REMINDERS, have_time);
+                }
+
+                if (!have_time) {
+                    GameStats_Turn.reminders_left_at_cutoffs += reminders_left;
                     AILOG_LOG(log, "{} reminders executed", reminders_executed);
                     break;
                 }
             }
 
         } else {
+            GameStats_Turn.reminders_left_at_cutoffs += normal_reminders.GetCount() + priority_reminders.GetCount();
             AILOG_LOG(log, "No reminders executed, {} msecs since frame update", TickTimer_GetElapsedTime());
         }
 

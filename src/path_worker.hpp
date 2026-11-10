@@ -26,6 +26,7 @@
 #include <memory>
 #include <optional>
 
+#include "gamestats.hpp"
 #include "pathfill.hpp"
 #include "pathrequest.hpp"
 #include "searcher.hpp"
@@ -46,6 +47,8 @@ struct PathWorkerJob {
     SmartPointer<PathRequest> request;           ///< The original request (kept alive).
     std::unique_ptr<PathSearchContext> context;  ///< Owns AccessMap copy and Searchers.
     Point start_position;                        ///< Cached unit position at dispatch time.
+    uint64_t dispatch_tick{0};                   ///< Game statistics: tick of the dispatch.
+    uint64_t dispatch_ns{0};                     ///< Game statistics: time of the dispatch.
 
     PathWorkerJob(uint32_t id, SmartPointer<PathRequest> req, std::unique_ptr<PathSearchContext> ctx, Point start)
         : job_id(id), request(std::move(req)), context(std::move(ctx)), start_position(start) {}
@@ -59,6 +62,17 @@ struct PathWorkerJob {
      * \return The path result if found, or std::nullopt if no path exists.
      */
     std::optional<PathResult> Execute() {
+        const uint64_t start_ns = GameStats_Now();
+        std::optional<PathResult> result = Search();
+
+        GameStats_WorkerBusyNs.fetch_add(GameStats_Now() - start_ns, std::memory_order_relaxed);
+        GameStats_WorkerJobs.fetch_add(1, std::memory_order_relaxed);
+
+        return result;
+    }
+
+private:
+    std::optional<PathResult> Search() {
         if (!context) {
             return std::nullopt;
         }

@@ -28,6 +28,7 @@
 #include "ailog.hpp"
 #include "aiplayer.hpp"
 #include "game_manager.hpp"
+#include "gamestats.hpp"
 #include "task_manager.hpp"
 #include "taskattack.hpp"
 #include "taskmove.hpp"
@@ -224,7 +225,7 @@ bool TaskKillUnit::GetNewUnits() {
                         unit1->RemoveTasks();
                         AddUnit(*unit1);
 
-                        if (TickTimer_HaveTimeToThink()) {
+                        if (GameStats_Budget(GAMESTATS_BUDGET_KILL_UNIT, TickTimer_HaveTimeToThink())) {
                             if (!unit2 && m_parent) {
                                 unit2 = dynamic_cast<TaskAttack*>(&*m_parent)->DetermineLeader();
                             }

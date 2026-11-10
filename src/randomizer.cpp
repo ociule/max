@@ -26,12 +26,31 @@
 #include <memory>
 
 static std::unique_ptr<XoshiroCpp::Xoshiro128StarStar> Randomizer_Object;
+static uint64_t Randomizer_DrawCount;
 
 void Randomizer_Init() {
     Randomizer_Object = std::make_unique<XoshiroCpp::Xoshiro128StarStar>(XoshiroCpp::SplitMix64(std::time(nullptr))());
 }
 
-uint32_t Randomizer_GetNext() { return (*Randomizer_Object)(); }
+uint32_t Randomizer_GetNext() {
+    ++Randomizer_DrawCount;
+
+    return (*Randomizer_Object)();
+}
+
+uint64_t Randomizer_GetDrawCount() { return Randomizer_DrawCount; }
+
+uint64_t Randomizer_GetStateHash() {
+    uint64_t hash = 0;
+
+    if (Randomizer_Object) {
+        for (const uint32_t word : Randomizer_Object->serialize()) {
+            hash = hash * 0x100000001b3ull ^ word;
+        }
+    }
+
+    return hash;
+}
 
 void Randomizer_SetSeed(const uint32_t seed) {
     Randomizer_Object = std::make_unique<XoshiroCpp::Xoshiro128StarStar>(XoshiroCpp::SplitMix64(seed)());

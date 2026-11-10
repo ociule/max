@@ -27,6 +27,7 @@
 #include "ai.hpp"
 #include "ailog.hpp"
 #include "aiplayer.hpp"
+#include "gamestats.hpp"
 #include "task_manager.hpp"
 #include "taskmove.hpp"
 #include "ticktimer.hpp"
@@ -228,7 +229,7 @@ bool TaskSearchDestination::Search() {
             }
         }
 
-        if (TickTimer_HaveTimeToThink() || loop_count <= 20) {
+        if (GameStats_Budget(GAMESTATS_BUDGET_SEARCH_DESTINATION, TickTimer_HaveTimeToThink() || loop_count <= 20)) {
             if (spiral_cursors[index] == spiral_center || spiral_cursors[0] == spiral_cursors[1]) {
                 return false;
             }
