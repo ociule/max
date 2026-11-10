@@ -28,7 +28,9 @@
 #include "commandline.hpp"
 #include "resource_manager.hpp"
 
-/* Stand-in animation tables for hidden games, which do not load MAX.RES (see CommandLine_IsHidden()).
+/* Stand-in animation tables for hidden games run without MAX.RES (see CommandLine_IsHidden()). A hidden game reads
+ * the original tables from MAX.RES when it is available (ResourceManager_LoadMaxResources()), these only stand in for
+ * tables it could not read. Final AI evaluations run with MAX.RES, so they use the original data.
  *
  * The D_* resources of MAX.RES hold the sprite frame layout of each unit: base frame and frame count of the body,
  * turret, firing and connector sprites plus the turret mount offsets. Nothing is drawn in a hidden game, but a few

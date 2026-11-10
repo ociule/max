@@ -26,8 +26,10 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -181,7 +183,9 @@ static void ResourceManager_LoadMaxResources();
 static int32_t ResourceManager_InitResManager();
 static void ResourceManager_TestMouse();
 static bool ResourceManager_GetGameDataPath(std::filesystem::path& path);
-static int32_t ResourceManager_BuildResourceTable(const std::filesystem::path filepath);
+static int32_t ResourceManager_BuildResourceTable(const std::filesystem::path filepath,
+                                                  bool (*filter)(ResourceID id) = nullptr);
+static bool ResourceManager_IsUnitAnimationTable(ResourceID id);
 static int32_t ResourceManager_BuildColorTables();
 static void ResourceManager_InitMinimapResources();
 static void ResourceManager_InitMainmapResources();
@@ -651,10 +655,33 @@ void ResourceManager_PreloadPatches() {
     }
 }
 
+bool ResourceManager_IsUnitAnimationTable(ResourceID id) {
+    return std::string_view(ResourceManager_ResourceIdList[id]).starts_with("D_");
+}
+
 void ResourceManager_LoadMaxResources() {
-    // a hidden game never reads graphics, sounds or animation tables, see CommandLine_IsHidden()
+    /* A hidden game reads nothing from MAX.RES but the unit animation tables (the D_* resources, see Unit::Unit()).
+     * They pace game logic, an explosion lives until its last frame and a bridge rises frame by frame, so a hidden
+     * game uses the original tables when MAX.RES is available. Graphics, sounds and everything else stay out of the
+     * resource table and can never be loaded. Without MAX.RES the units use stand-in tables.
+     */
     if (CommandLine_IsHidden()) {
-        SDL_Log("Hidden mode: MAX.RES is not loaded.");
+        const auto filepath =
+            ResourceManager_GetFileResourcePath("MAX.RES", ResourceManager_FilePathGameData).lexically_normal();
+        std::error_code ec;
+
+        if (!std::filesystem::exists(filepath, ec) || ec) {
+            SDL_Log("Hidden mode: no MAX.RES in %s, the units use stand-in animation tables.",
+                    ResourceManager_FilePathGameData.string().c_str());
+
+        } else if (ResourceManager_BuildResourceTable(filepath, &ResourceManager_IsUnitAnimationTable) !=
+                   EXIT_CODE_NO_ERROR) {
+            SDL_Log("Hidden mode: failed to read %s, the units use stand-in animation tables.",
+                    filepath.string().c_str());
+
+        } else {
+            SDL_Log("Hidden mode: %s, only the unit animation tables are read from it.", filepath.string().c_str());
+        }
 
         return;
     }
@@ -1029,7 +1056,7 @@ int32_t ResourceManager_BuildColorTables() {
     return result;
 }
 
-int32_t ResourceManager_BuildResourceTable(const std::filesystem::path filepath) {
+int32_t ResourceManager_BuildResourceTable(const std::filesystem::path filepath, bool (*filter)(ResourceID id)) {
     int32_t result;
     FILE* fp;
     struct res_header header;
@@ -1057,7 +1084,8 @@ int32_t ResourceManager_BuildResourceTable(const std::filesystem::path filepath)
                         for (int32_t i = ResourceManager_ResItemCount; i < new_item_count; ++i) {
                             ResourceID id = ResourceManager_GetResourceID(i);
                             if (id != INVALID_ID &&
-                                ResourceManager_ResMetaTable[id].res_file_item_index == INVALID_ID) {
+                                ResourceManager_ResMetaTable[id].res_file_item_index == INVALID_ID &&
+                                (!filter || filter(id))) {
                                 ResourceManager_ResMetaTable[id].res_file_item_index = static_cast<ResourceID>(i);
                                 ResourceManager_ResMetaTable[id].res_file_id = ResourceManager_ResFileCount;
                             }
@@ -1648,6 +1676,34 @@ void ResourceManager_InitUnits() {
     if (ResourceManager_Units && ResourceManager_Units->LoadResource()) {
     } else {
         SDL_Log("Warning: Failed to load unit definitions.");
+    }
+
+    // record in the log which animation tables pace this hidden game
+    if (CommandLine_IsHidden() && ResourceManager_Units) {
+        std::set<ResourceID> from_max_res;
+        std::set<ResourceID> stand_in;
+
+        for (auto [unit_id, unit] : *ResourceManager_Units) {
+            const ResourceID data = unit.GetData();
+
+            if (data != INVALID_ID) {
+                if (ResourceManager_GetResourceSize(data) > 0) {
+                    from_max_res.insert(data);
+
+                } else {
+                    stand_in.insert(data);
+                }
+            }
+        }
+
+        std::string names;
+
+        for (const ResourceID data : stand_in) {
+            names += std::string(" ") + ResourceManager_GetResourceID(data);
+        }
+
+        SDL_Log("Hidden mode: %zu unit animation tables from MAX.RES, %zu stand-in tables%s%s.", from_max_res.size(),
+                stand_in.size(), stand_in.empty() ? "" : ":", names.c_str());
     }
 }
 
