@@ -577,7 +577,7 @@ static json GameStats_Teams() {
             json remnants = json::array();
 
             // the last few mobile units of a team, to tell why a beaten team is not eliminated
-            if (units[team] > 0 && units[team] <= 5) {
+            if (units[team] > 0 && units[team] <= 10) {
                 for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_MobileAirUnits}) {
                     for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
                         if ((*it).team == team) {
