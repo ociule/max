@@ -248,11 +248,15 @@ bool CommandLine_IsGame() { return CommandLine_Values.is_game; }
 bool CommandLine_IsHidden() { return CommandLine_Values.hidden; }
 
 static SDL_AssertState SDLCALL CommandLine_AssertionHandler(const SDL_AssertData* data, void* userdata) {
-    // nobody can answer a dialog in a hidden game
-    SDL_Log("Command line: assertion failed at %s (%s:%d): %s", data->function, data->filename, data->linenum,
-            data->condition);
+    // nobody can answer a dialog in a hidden game, log the first failure of each assertion and count them all
+    if (data->trigger_count <= 1) {
+        SDL_Log("Command line: assertion failed at %s (%s:%d): %s", data->function, data->filename, data->linenum,
+                data->condition);
+    }
 
-    return SDL_ASSERTION_ALWAYS_IGNORE;
+    GameStats_Assertion();
+
+    return SDL_ASSERTION_IGNORE;
 }
 
 void CommandLine_RunGame() {

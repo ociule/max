@@ -101,6 +101,8 @@ struct GameStats_Counters {
     uint64_t end_turn_idle_resets;
     uint64_t end_turn_by_idle_limit;
     uint64_t end_turn_by_timer;
+
+    uint64_t assertions;
 };
 
 extern GameStats_Counters GameStats_Turn;
@@ -142,5 +144,8 @@ void GameStats_TimeLimit(uint64_t time_limit_ms);
 void GameStats_PathDelivered(uint64_t dispatch_tick, uint64_t dispatch_ns);
 void GameStats_EndTurnIdle(uint32_t idle_ticks);
 void GameStats_AttackLanded(uint16_t attacker_team);
+
+/// Counts a failed assertion (hidden games log and ignore them).
+void GameStats_Assertion();
 
 #endif /* GAMESTATS_HPP */

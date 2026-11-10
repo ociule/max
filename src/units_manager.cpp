@@ -3864,6 +3864,14 @@ void UnitsManager_ActivateUnit(UnitInfo* unit) {
             client->SetOrder(ORDER_MOVE);
             client->SetOrderState(ORDER_STATE_INIT);
 
+            /* The aircraft takes off from the container's square. A stored aircraft was removed from the map hash,
+             * without this it stayed unknown to every map hash lookup until its first flight step, for good when it
+             * did not move on. A new aircraft that waited in its factory is still in the map hash, Remove() first keeps
+             * a single entry either way.
+             */
+            Hash_MapHash.Remove(client.Get());
+            Hash_MapHash.Add(client.Get());
+
             Access_UpdateMapStatus(client.Get(), true);
             UnitsManager_ScaleUnit(client.Get(), ORDER_STATE_EXPAND);
 

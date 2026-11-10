@@ -206,7 +206,8 @@ void PathsManager::PollResults() {
                 AILOG(log, "No path found.");
             }
 
-            CompleteRequest(request, &*ground_path);
+            // no path found leaves ground_path empty, &*ground_path would bind a reference to null
+            CompleteRequest(request, ground_path.Get());
         }
     }
 }

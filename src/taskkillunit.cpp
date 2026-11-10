@@ -219,7 +219,8 @@ bool TaskKillUnit::GetNewUnits() {
 
                 do {
                     unit1 = FindClosestCombatUnit(&UnitsManager_MobileLandSeaUnits, nullptr, &distance, map);
-                    unit1 = FindClosestCombatUnit(&UnitsManager_MobileAirUnits, &*unit1, &distance, nullptr);
+                    // unit1 is empty when no land or sea unit qualifies, &*unit1 would bind a reference to null
+                    unit1 = FindClosestCombatUnit(&UnitsManager_MobileAirUnits, unit1.Get(), &distance, nullptr);
 
                     if (unit1) {
                         unit1->RemoveTasks();

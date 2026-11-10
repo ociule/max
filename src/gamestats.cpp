@@ -25,13 +25,20 @@
 
 #include <algorithm>
 #include <fstream>
+#include <map>
 #include <nlohmann/json.hpp>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #if defined(__linux__)
 #include <sys/resource.h>
 #endif /* defined(__linux__) */
 
+#include "access.hpp"
 #include "game_manager.hpp"
+#include "hash.hpp"
 #include "randomizer.hpp"
 #include "resource_manager.hpp"
 #include "units_manager.hpp"
@@ -108,6 +115,7 @@ static void GameStats_Accumulate(GameStats_Counters& total, const GameStats_Coun
     total.end_turn_idle_resets += turn.end_turn_idle_resets;
     total.end_turn_by_idle_limit += turn.end_turn_by_idle_limit;
     total.end_turn_by_timer += turn.end_turn_by_timer;
+    total.assertions += turn.assertions;
 }
 
 static json GameStats_ToJson(const GameStats_Counters& counters) {
@@ -157,6 +165,347 @@ static json GameStats_ToJson(const GameStats_Counters& counters) {
                      {"idle_resets", counters.end_turn_idle_resets},
                      {"by_idle_limit", counters.end_turn_by_idle_limit},
                      {"by_timer", counters.end_turn_by_timer}};
+
+    j["assertions"] = counters.assertions;
+
+    return j;
+}
+
+static uint64_t GameStats_ConsistencyViolations;
+
+/* The surface a mobile unit stands on by the rules of Access_IsAccessible(): a bridge is land for land units and
+ * water for sea units, even on a coast tile, a water platform and rubble are land.
+ */
+static uint8_t GameStats_SurfaceFor(const UnitInfo* unit) {
+    uint8_t surface = Access_GetSurfaceType(unit->grid_x, unit->grid_y);
+    const auto cell = Hash_MapHash[Point(unit->grid_x, unit->grid_y)];
+
+    if (cell) {
+        for (auto it = cell->Begin(), it_end = cell->End(); it != it_end; ++it) {
+            switch ((*it).GetUnitType()) {
+                case BRIDGE: {
+                    surface = (unit->flags & MOBILE_LAND_UNIT) ? SURFACE_TYPE_LAND : SURFACE_TYPE_WATER;
+                } break;
+
+                case WTRPLTFM:
+                case LRGRUBLE:
+                case SMLRUBLE: {
+                    surface = SURFACE_TYPE_LAND;
+                } break;
+
+                default: {
+                } break;
+            }
+        }
+    }
+
+    return surface;
+}
+
+/* Orders whose execution reads the unit's parent while they are in progress: the unit being serviced, carried, built
+ * or held (ProcessRepair(), ProcessTransfer(), ProcessLoading(), ProcessUnloading(), ProcessLanding(),
+ * UnitsManager_ProcessOrderReload(), UnitsManager_ProcessOrderUpgrade(), UnitsManager_ProcessOrderActivate(),
+ * UnitsManager_StartClearing(), a builder's finished product). A unit boarding a container (ORDER_MOVE_TO_UNIT) finds
+ * it by position, not by its parent. A finished order (ORDER_STATE_EXECUTING_ORDER) reads nothing any more.
+ */
+static bool GameStats_OrderUsesParent(const UnitInfo* unit) {
+    if (unit->GetOrderState() == ORDER_STATE_EXECUTING_ORDER) {
+        return false;
+    }
+
+    switch (unit->GetOrder()) {
+        case ORDER_BUILD: {
+            // a builder links to its product when the product is done, until then only a bulldozer reads its parent
+            return unit->GetOrderState() == ORDER_STATE_UNIT_READY ||
+                   unit->GetOrderState() == ORDER_STATE_BUILD_CLEARING || unit->GetUnitType() == BULLDOZR;
+        }
+
+        case ORDER_ACTIVATE:
+        case ORDER_UNLOAD:
+        case ORDER_CLEAR:
+        case ORDER_LAND:
+        case ORDER_LOAD:
+        case ORDER_REPAIR:
+        case ORDER_RELOAD:
+        case ORDER_TRANSFER:
+        case ORDER_UPGRADE:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+/* Consistency checks of the game state, run at the end of every team turn, when no unit moves. Only reads. The checks
+ * cross the unit lists, the map index (Hash_MapHash), the unit index (Hash_UnitHash), the containers and their stored
+ * units, and each unit's limits. A violation is a state the game logic should never leave behind, counted per check
+ * with the first few cases described.
+ */
+static json GameStats_CheckConsistency() {
+    std::map<std::string, uint64_t> counts;
+    std::map<std::string, uint64_t> notes;
+    std::vector<std::string> examples;
+    std::vector<std::string> note_examples;
+
+    auto describe = [](const UnitInfo* unit) {
+        return std::string(ResourceManager_GetResourceID(unit->GetUnitType())) + " team " +
+               std::to_string(unit->team) + " id " + std::to_string(unit->GetId()) + " at [" +
+               std::to_string(unit->grid_x + 1) + "," + std::to_string(unit->grid_y + 1) + "] order " +
+               std::to_string(unit->GetOrder()) + "/" + std::to_string(unit->GetOrderState());
+    };
+
+    auto report = [&counts, &examples](const char* check, const std::string& text) {
+        ++counts[check];
+
+        if (examples.size() < 20) {
+            examples.push_back(std::string(check) + ": " + text);
+        }
+    };
+
+    // known harmless states, counted apart from the violations, with their own examples
+    auto note = [&notes, &note_examples](const char* check, const std::string& text) {
+        ++notes[check];
+
+        if (note_examples.size() < 5) {
+            note_examples.push_back(std::string(check) + ": " + text);
+        }
+    };
+
+    struct ListInfo {
+        SmartList<UnitInfo>* list;
+        const char* name;
+    };
+
+    const ListInfo lists[] = {{&UnitsManager_GroundCoverUnits, "ground_cover"},
+                              {&UnitsManager_MobileLandSeaUnits, "mobile_land_sea"},
+                              {&UnitsManager_StationaryUnits, "stationary"},
+                              {&UnitsManager_MobileAirUnits, "mobile_air"},
+                              {&UnitsManager_ParticleUnits, "particles"}};
+
+    std::unordered_map<const UnitInfo*, int32_t> memberships;
+    std::vector<UnitInfo*> units;
+
+    for (const auto& list : lists) {
+        for (auto it = list.list->Begin(), it_end = list.list->End(); it != it_end; ++it) {
+            if (++memberships[it->Get()] == 1) {
+                units.push_back(it->Get());
+            }
+        }
+    }
+
+    if (UnitsManager_ParticleUnits.GetCount() > 0) {
+        report("particles_at_rest", std::to_string(UnitsManager_ParticleUnits.GetCount()) + " particles");
+    }
+
+    const Point map_size = ResourceManager_MapSize;
+    std::unordered_map<const UnitInfo*, int32_t> held_units;
+    std::unordered_set<uint32_t> ids;
+
+    for (UnitInfo* unit : units) {
+        if (memberships[unit] > 1) {
+            report("unit_in_several_lists", describe(unit));
+        }
+
+        if (unit->grid_x < 0 || unit->grid_y < 0 || unit->grid_x >= map_size.x || unit->grid_y >= map_size.y) {
+            report("unit_outside_map", describe(unit));
+
+            continue;
+        }
+
+        if (unit->flags & (EXPLODING | MISSILE_UNIT)) {
+            continue;
+        }
+
+        UnitValues* values = unit->GetBaseValues();
+
+        if (unit->hits == 0 && values->GetAttribute(ATTRIB_HITS) > 0 && unit->GetOrderState() != ORDER_STATE_DESTROY) {
+            report("destroyed_unit_in_lists", describe(unit));
+        }
+
+        if (unit->hits > values->GetAttribute(ATTRIB_HITS)) {
+            report("hits_above_max", describe(unit) + " hits " + std::to_string(unit->hits));
+        }
+
+        if (unit->ammo > values->GetAttribute(ATTRIB_AMMO)) {
+            report("ammo_above_max", describe(unit) + " ammo " + std::to_string(unit->ammo));
+        }
+
+        if (unit->shots > values->GetAttribute(ATTRIB_ROUNDS)) {
+            report("shots_above_max", describe(unit) + " shots " + std::to_string(unit->shots));
+        }
+
+        if (unit->speed > values->GetAttribute(ATTRIB_SPEED)) {
+            report("speed_above_max", describe(unit) + " speed " + std::to_string(unit->speed));
+        }
+
+        /* Rubble keeps the materials a bulldozer salvages from it in its storage and a greenhouse counts the points it
+         * produced in it, beyond any storage attribute.
+         */
+        const bool factory_unit_ready = (unit->flags & STATIONARY) && unit->GetOrder() == ORDER_BUILD &&
+                                        unit->GetOrderState() == ORDER_STATE_UNIT_READY && unit->storage == 1;
+
+        if (unit->storage < 0 ||
+            (unit->storage > values->GetAttribute(ATTRIB_STORAGE) && unit->GetUnitType() != SMLRUBLE &&
+             unit->GetUnitType() != LRGRUBLE && unit->GetUnitType() != GREENHSE && !factory_unit_ready)) {
+            report("storage_out_of_range", describe(unit) + " storage " + std::to_string(unit->storage));
+        }
+
+        if (unit->GetId() != UnitInfo::NO_ID) {
+            if (!ids.insert(unit->GetId()).second) {
+                report("duplicate_unit_id", describe(unit));
+            }
+
+            if (Hash_UnitHash[unit->GetId()] != unit) {
+                report("unit_index_mismatch", describe(unit));
+            }
+        }
+
+        UnitInfo* parent = unit->GetParent();
+
+        /* A factory holds its finished unit on its own cell until the unit is activated, a mobile builder its finished
+         * building: the unit is idle and on the map, a factory counts it as its storage. Harmless, but a unit that
+         * waits for turns shows a stuck builder.
+         */
+        const bool waits_for_builder = unit->GetOrder() == ORDER_IDLE && parent && parent->GetOrder() == ORDER_BUILD &&
+                                       parent->GetOrderState() == ORDER_STATE_UNIT_READY;
+
+        if (waits_for_builder) {
+            note("unit_waits_for_builder", describe(unit) + " of " + describe(parent));
+
+        } else if (unit->GetOrder() == ORDER_IDLE) {
+            // a stored unit: held by a living container, off the map
+            if (!parent) {
+                report("stored_unit_without_container", describe(unit));
+
+            } else if (!memberships.count(parent) || parent->hits == 0) {
+                report("stored_unit_in_destroyed_container", describe(unit) + " in " + describe(parent));
+
+            } else {
+                ++held_units[parent];
+            }
+
+        } else {
+            /* A unit keeps the parent of its last service order (a repair truck the unit it repaired), nothing reads it
+             * until an order that uses the parent sets a new one. Only an order that reads a removed parent is wrong.
+             */
+            if (parent && !memberships.count(parent) && !(parent->flags & (EXPLODING | MISSILE_UNIT))) {
+                if (GameStats_OrderUsesParent(unit)) {
+                    report("parent_not_in_lists", describe(unit) + " parent " + describe(parent));
+
+                } else {
+                    note("stale_parent", describe(unit) + " parent " + describe(parent));
+                }
+            }
+
+            // every cell of a unit on the map is indexed
+            const int32_t size = (unit->flags & BUILDING) ? 2 : 1;
+
+            for (int32_t dx = 0; dx < size; ++dx) {
+                for (int32_t dy = 0; dy < size; ++dy) {
+                    const auto cell = Hash_MapHash[Point(unit->grid_x + dx, unit->grid_y + dy)];
+                    bool found = false;
+
+                    if (cell) {
+                        for (auto it = cell->Begin(), it_end = cell->End(); it != it_end; ++it) {
+                            if (it->Get() == unit) {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!found) {
+                        report("unit_missing_from_map_index", describe(unit));
+                    }
+                }
+            }
+
+            // mobile units stand on terrain they may enter
+            if ((unit->flags & (MOBILE_LAND_UNIT | MOBILE_SEA_UNIT)) && !(unit->flags & MOBILE_AIR_UNIT)) {
+                const uint8_t surface = GameStats_SurfaceFor(unit);
+
+                if (!(ResourceManager_GetUnit(unit->GetUnitType()).GetLandType() & surface)) {
+                    report("unit_on_forbidden_terrain", describe(unit) + " surface " + std::to_string(surface));
+                }
+            }
+        }
+    }
+
+    // containers count exactly the units they hold
+    for (UnitInfo* unit : units) {
+        const ResourceID type = unit->GetUnitType();
+        const auto held = held_units.find(unit);
+        const int32_t held_count = held != held_units.end() ? held->second : 0;
+
+        if (type == SEATRANS || type == AIRTRANS || type == CLNTRANS || type == HANGAR || type == DOCK ||
+            type == BARRACKS || type == DEPOT) {
+            if (unit->hits > 0 && unit->storage != held_count) {
+                report("container_storage_mismatch",
+                       describe(unit) + " storage " + std::to_string(unit->storage) + " holds " +
+                           std::to_string(held_count));
+            }
+
+        } else if (held_count > 0) {
+            report("units_held_by_non_container", describe(unit) + " holds " + std::to_string(held_count));
+        }
+    }
+
+    // every map index entry is a listed unit on one of its cells
+    for (int32_t x = 0; x < map_size.x; ++x) {
+        for (int32_t y = 0; y < map_size.y; ++y) {
+            const auto cell = Hash_MapHash[Point(x, y)];
+
+            if (!cell) {
+                continue;
+            }
+
+            for (auto it = cell->Begin(), it_end = cell->End(); it != it_end; ++it) {
+                const UnitInfo* unit = it->Get();
+
+                if (!memberships.count(unit)) {
+                    report("map_index_unit_not_in_lists",
+                           describe(unit) + " indexed at [" + std::to_string(x + 1) + "," + std::to_string(y + 1) +
+                               "]");
+                    continue;
+                }
+
+                const UnitInfo* holder = unit->GetParent();
+
+                if (unit->GetOrder() == ORDER_IDLE &&
+                    !(holder && holder->GetOrder() == ORDER_BUILD &&
+                      holder->GetOrderState() == ORDER_STATE_UNIT_READY)) {
+                    report("stored_unit_on_map", describe(unit));
+                    continue;
+                }
+
+                const int32_t size = (unit->flags & BUILDING) ? 2 : 1;
+                const bool on_unit = x >= unit->grid_x && x < unit->grid_x + size && y >= unit->grid_y &&
+                                     y < unit->grid_y + size;
+                const bool on_transit = unit->in_transit && x == unit->last_target.x && y == unit->last_target.y;
+
+                if (!on_unit && !on_transit) {
+                    report("map_index_wrong_cell", describe(unit) + " indexed at [" + std::to_string(x + 1) + "," +
+                                                       std::to_string(y + 1) + "]");
+                }
+            }
+        }
+    }
+
+    uint64_t violations = 0;
+
+    for (const auto& [check, count] : counts) {
+        violations += count;
+    }
+
+    GameStats_ConsistencyViolations += violations;
+
+    json j;
+
+    j["violations"] = violations;
+    j["by_check"] = counts;
+    j["notes"] = notes;
+    j["examples"] = examples;
+    j["note_examples"] = note_examples;
 
     return j;
 }
@@ -225,7 +574,35 @@ static json GameStats_Teams() {
                 lost += casualty;
             }
 
+            json remnants = json::array();
+
+            // the last few mobile units of a team, to tell why a beaten team is not eliminated
+            if (units[team] > 0 && units[team] <= 5) {
+                for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_MobileAirUnits}) {
+                    for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
+                        if ((*it).team == team) {
+                            std::string seen_by;
+
+                            for (int32_t other = PLAYER_TEAM_RED; other < PLAYER_TEAM_MAX - 1; ++other) {
+                                if (other != team && (*it).IsVisibleToTeam(other)) {
+                                    seen_by += GameStats_TeamNames[other];
+                                }
+                            }
+
+                            remnants.push_back(std::string(ResourceManager_GetResourceID((*it).GetUnitType())) +
+                                               " at [" + std::to_string((*it).grid_x + 1) + "," +
+                                               std::to_string((*it).grid_y + 1) + "] order " +
+                                               std::to_string((*it).GetOrder()) + "/" +
+                                               std::to_string((*it).GetOrderState()) + " hits " +
+                                               std::to_string((*it).hits) + " seen by " +
+                                               (seen_by.empty() ? "none" : seen_by));
+                        }
+                    }
+                }
+            }
+
             teams[GameStats_TeamNames[team]] = {{"units", units[team]},
+                                                {"remnants", remnants},
                                                 {"buildings", buildings[team]},
                                                 {"worth", WinLoss_GetTotalWorthOfAssets(team)},
                                                 {"points", info.team_points},
@@ -305,6 +682,7 @@ void GameStats_EndTeamTurn(int32_t team) {
     line["rng_draws"] = Randomizer_GetDrawCount();
     line["rng_state"] = Randomizer_GetStateHash();
     line["checksum"] = GameStats_Checksum();
+    line["consistency"] = GameStats_CheckConsistency();
 
     GameStats_Write(line);
 
@@ -337,6 +715,8 @@ void GameStats_EndGame() {
     line["rng_draws"] = Randomizer_GetDrawCount();
     line["rng_state"] = Randomizer_GetStateHash();
     line["checksum"] = GameStats_Checksum();
+    line["consistency"] = GameStats_CheckConsistency();
+    line["consistency_violations_total"] = GameStats_ConsistencyViolations;
 
 #if defined(__linux__)
     struct rusage process_usage {};
@@ -393,6 +773,8 @@ void GameStats_PathDelivered(uint64_t dispatch_tick, uint64_t dispatch_ns) {
 void GameStats_EndTurnIdle(uint32_t idle_ticks) {
     GameStats_Turn.end_turn_idle_max = std::max<uint64_t>(GameStats_Turn.end_turn_idle_max, idle_ticks);
 }
+
+void GameStats_Assertion() { ++GameStats_Turn.assertions; }
 
 void GameStats_AttackLanded(uint16_t attacker_team) {
     if (attacker_team < PLAYER_TEAM_MAX) {

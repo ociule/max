@@ -802,7 +802,8 @@ UnitInfo* TaskAttack::DetermineLeader() {
             leader->AddDelayedTask(this);
         }
 
-        result = &*leader;
+        // leader is empty when no unit can lead, &*leader would bind a reference to null
+        result = leader.Get();
     }
 
     return result;
