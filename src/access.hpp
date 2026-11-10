@@ -112,6 +112,9 @@ bool Access_CanReceiveUnits(const UnitInfo* receiver);
 UnitInfo* Access_GetTeamBuilding(uint16_t team, int32_t grid_x, int32_t grid_y);
 void Access_MultiSelect(UnitInfo* unit, Rect* bounds);
 bool Access_AreTaskEventsPending();
+
+/// Logs the units and attack targets that Access_AreTaskEventsPending() waits for.
+void Access_LogPendingTaskEvents();
 bool Access_ProcessNewGroupOrder(UnitInfo* unit);
 void Access_UpdateMultiSelection(UnitInfo* unit);
 void Access_TriggerEnemyMine(uint16_t team, int32_t grid_x, int32_t grid_y);

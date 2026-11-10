@@ -50,7 +50,8 @@ def stats_line(g):
             f"reminders left {g['reminders_left_at_cutoffs']} | paths {paths['dispatched']} "
             f"lag ticks mean {paths['latency_ticks_mean']:.2f} max {paths['latency_ticks_max']} "
             f"ms mean {paths['latency_ms_mean']:.1f} | ends idle {g['end_turn']['by_idle_limit']} "
-            f"timer {g['end_turn']['by_timer']} | cpu {process.get('user_s', 0):.0f}s "
+            f"timer {g['end_turn']['by_timer']} abandoned {g['end_turn'].get('wait_abandoned', 0)} "
+            f"| cpu {process.get('user_s', 0):.0f}s "
             f"rss {process.get('peak_rss_kb', 0) / 1024:.0f}MB")
 
 

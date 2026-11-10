@@ -115,6 +115,7 @@ static void GameStats_Accumulate(GameStats_Counters& total, const GameStats_Coun
     total.end_turn_idle_resets += turn.end_turn_idle_resets;
     total.end_turn_by_idle_limit += turn.end_turn_by_idle_limit;
     total.end_turn_by_timer += turn.end_turn_by_timer;
+    total.end_turn_wait_abandoned += turn.end_turn_wait_abandoned;
     total.assertions += turn.assertions;
 }
 
@@ -164,7 +165,8 @@ static json GameStats_ToJson(const GameStats_Counters& counters) {
     j["end_turn"] = {{"idle_ticks_max", counters.end_turn_idle_max},
                      {"idle_resets", counters.end_turn_idle_resets},
                      {"by_idle_limit", counters.end_turn_by_idle_limit},
-                     {"by_timer", counters.end_turn_by_timer}};
+                     {"by_timer", counters.end_turn_by_timer},
+                     {"wait_abandoned", counters.end_turn_wait_abandoned}};
 
     j["assertions"] = counters.assertions;
 

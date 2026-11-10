@@ -490,8 +490,35 @@ void GameManager_TeamTurnTurnBased(int32_t& game_state) {
 
             GameManager_ResetRenderState();
 
-            while (Access_AreTaskEventsPending()) {
-                GameManager_ProgressTurn();
+            {
+                /* A turn whose end waits far longer than any animation lists what it waits for. A unit can be left
+                 * waiting for good (a rare hang of long computer player games), a hidden game has nobody to notice:
+                 * it gives up the wait, logs the units and counts it in the game statistics.
+                 */
+                const uint64_t wait_start_tick = GameStats_TickCount;
+                bool stall_logged = false;
+
+                while (Access_AreTaskEventsPending()) {
+                    GameManager_ProgressTurn();
+
+                    if (!stall_logged && GameStats_TickCount - wait_start_tick > 2400) {
+                        stall_logged = true;
+
+                        SDL_Log("End of turn %d of team %d still waits after 2400 ticks.", GameManager_TurnCounter,
+                                team);
+                        Access_LogPendingTaskEvents();
+                    }
+
+                    if (CommandLine_IsHidden() && GameStats_TickCount - wait_start_tick > 4800) {
+                        SDL_Log("End of turn %d of team %d gave up waiting after 4800 ticks.", GameManager_TurnCounter,
+                                team);
+                        Access_LogPendingTaskEvents();
+
+                        ++GameStats_Turn.end_turn_wait_abandoned;
+
+                        break;
+                    }
+                }
             }
 
             GameStats_EndTeamTurn(team);

@@ -2267,17 +2267,43 @@ void Access_ProcessGroupAirPath(UnitInfo* unit) {
     }
 }
 
+/// A unit whose order is still being carried out, the end of a turn waits for it.
+static bool Access_IsTaskEventPending(const UnitInfo& unit) {
+    return unit.GetOrder() == ORDER_FIRE || unit.GetOrder() == ORDER_EXPLODE || unit.GetOrder() == ORDER_ACTIVATE ||
+           unit.GetOrder() == ORDER_AWAIT_TAPE_POSITIONING || unit.GetOrder() == ORDER_AWAIT_DISABLE_UNIT ||
+           unit.GetOrder() == ORDER_AWAIT_STEAL_UNIT || unit.GetOrder() == ORDER_AWAIT_SCALING ||
+           unit.GetOrderState() == ORDER_STATE_DESTROY ||
+           (unit.GetOrder() == ORDER_MOVE && unit.GetOrderState() != ORDER_STATE_EXECUTING_ORDER) ||
+           (unit.GetOrder() == ORDER_MOVE_TO_UNIT && unit.GetOrderState() != ORDER_STATE_EXECUTING_ORDER) ||
+           (unit.GetOrder() == ORDER_MOVE_TO_ATTACK && unit.GetOrderState() != ORDER_STATE_EXECUTING_ORDER) ||
+           unit.GetOrderState() == ORDER_STATE_INIT;
+}
+
+void Access_LogPendingTaskEvents() {
+    for (int32_t i = std::size(Access_UnitsLists) - 1; i >= 0; --i) {
+        for (auto it = Access_UnitsLists[i]->Begin(), it_end = Access_UnitsLists[i]->End(); it != it_end; ++it) {
+            if (Access_IsTaskEventPending(*it)) {
+                SDL_Log("Pending task event: %s team %d id %u at [%d,%d] order %d state %d, path %s, path request %s.",
+                        ResourceManager_GetResourceID((*it).GetUnitType()), (*it).team, (*it).GetId(),
+                        (*it).grid_x + 1, (*it).grid_y + 1, (*it).GetOrder(), (*it).GetOrderState(),
+                        (*it).path != nullptr ? "yes" : "no",
+                        ResourceManager_GetPathsManager().HasRequest(it->Get()) ? "yes" : "no");
+            }
+        }
+    }
+
+    for (uint32_t i = 0; i < std::size(UnitsManager_DelayedAttackTargets); ++i) {
+        if (UnitsManager_DelayedAttackTargets[i].GetCount()) {
+            SDL_Log("Pending task event: team %u has %u delayed attack targets.", i,
+                    UnitsManager_DelayedAttackTargets[i].GetCount());
+        }
+    }
+}
+
 bool Access_AreTaskEventsPending() {
     for (int32_t i = std::size(Access_UnitsLists) - 1; i >= 0; --i) {
         for (auto it = Access_UnitsLists[i]->Begin(), it_end = Access_UnitsLists[i]->End(); it != it_end; ++it) {
-            if ((*it).GetOrder() == ORDER_FIRE || (*it).GetOrder() == ORDER_EXPLODE ||
-                (*it).GetOrder() == ORDER_ACTIVATE || (*it).GetOrder() == ORDER_AWAIT_TAPE_POSITIONING ||
-                (*it).GetOrder() == ORDER_AWAIT_DISABLE_UNIT || (*it).GetOrder() == ORDER_AWAIT_STEAL_UNIT ||
-                (*it).GetOrder() == ORDER_AWAIT_SCALING || (*it).GetOrderState() == ORDER_STATE_DESTROY ||
-                ((*it).GetOrder() == ORDER_MOVE && (*it).GetOrderState() != ORDER_STATE_EXECUTING_ORDER) ||
-                ((*it).GetOrder() == ORDER_MOVE_TO_UNIT && (*it).GetOrderState() != ORDER_STATE_EXECUTING_ORDER) ||
-                ((*it).GetOrder() == ORDER_MOVE_TO_ATTACK && (*it).GetOrderState() != ORDER_STATE_EXECUTING_ORDER) ||
-                (*it).GetOrderState() == ORDER_STATE_INIT) {
+            if (Access_IsTaskEventPending(*it)) {
                 if ((*it).GetOrderState() == ORDER_STATE_NEW_ORDER && (*it).team == GameManager_PlayerTeam &&
                     !ResourceManager_GetPathsManager().HasRequest(it->Get())) {
                     if ((*it).path != nullptr) {

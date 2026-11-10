@@ -14,10 +14,12 @@ time per turn. results/<label>/<seed>-<rep>/result.json holds the totals, the pe
 """
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -60,7 +62,14 @@ def parse_settings(pairs):
     return settings
 
 
-def run_game(binary, out_dir, seed, turns, extra, timeout, settings):
+def abort_main_thread(pid):
+    """SIGABRT to the main thread (tgkill), so the crash reporter records where the game is stuck."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    SYS_tgkill = 234  # x86_64
+    libc.syscall(SYS_tgkill, pid, pid, signal.SIGABRT)
+
+
+def run_game(binary, out_dir, seed, turns, extra, timeout, settings, watchdog=0):
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in ('max-port',):
         target = out_dir / old
@@ -87,7 +96,24 @@ def run_game(binary, out_dir, seed, turns, extra, timeout, settings):
     result_line = ''
     load = []
     next_load_sample = 0.0
+    hung = False
+    progress_size = -1
+    progress_time = time.monotonic()
+    stats = out_dir / 'max-port' / 'stats.jsonl'
     while True:
+        # the watchdog: no new log or statistics output for that long means the game is stuck
+        if watchdog:
+            size = sum(path.stat().st_size for path in (log, stats) if path.exists())
+            if size != progress_size:
+                progress_size = size
+                progress_time = time.monotonic()
+            elif not hung and game.poll() is None and time.monotonic() - progress_time > watchdog:
+                hung = True
+                abort_main_thread(game.pid)
+                try:
+                    game.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    game.kill()
         if time.monotonic() - start >= next_load_sample:
             load.append([round(time.monotonic() - start, 1), os.getloadavg()[0]])
             next_load_sample += 30
@@ -125,7 +151,7 @@ def run_game(binary, out_dir, seed, turns, extra, timeout, settings):
     result = {'seed': seed, 'turns': turns, 'args': args, 'exit_code': game.returncode, 'wall': wall,
               'turns_logged': len(turn_times), 'turn_times': turn_times, 'result': result_line, 'crashed': crashed,
               'binary_sha256': file_sha256(RUN / binary), 'build': build, 'git_commit': git_commit(),
-              'settings': settings, 'load': load}
+              'settings': settings, 'load': load, 'hung': hung}
     (out_dir / 'result.json').write_text(json.dumps(result, indent=1))
     return result
 
@@ -141,6 +167,9 @@ def main():
     parser.add_argument('--parallel', type=int, default=1)
     parser.add_argument('--timeout', type=float, default=4 * 3600)
     parser.add_argument('--setting', action='append', default=[], help='SECTION.key=value, repeatable')
+    parser.add_argument('--watchdog', type=float, default=0,
+                        help='seconds without new log output after which a game counts as hung: it gets SIGABRT, '
+                             'the crash report says where it was stuck (0: off)')
     parser.add_argument('extra', nargs=argparse.REMAINDER)
     args = parser.parse_args()
     global RUN
@@ -158,10 +187,11 @@ def main():
                     return
                 seed, rep = jobs.pop(0)
             out_dir = RUN / 'results' / args.label / f'{seed}-{rep}'
-            r = run_game(args.bin, out_dir, seed, args.turns, extra, args.timeout, settings)
+            r = run_game(args.bin, out_dir, seed, args.turns, extra, args.timeout, settings, args.watchdog)
             with lock:
                 print(f"{args.label} seed {seed} rep {rep}: exit {r['exit_code']} wall {r['wall']:.1f}s "
-                      f"turns {r['turns_logged']} crashed {r['crashed']} | {r['result'][:120]}", flush=True)
+                      f"turns {r['turns_logged']} crashed {r['crashed']} hung {r['hung']} | {r['result'][:120]}",
+                      flush=True)
 
     threads = [threading.Thread(target=worker) for _ in range(args.parallel)]
     for thread in threads:

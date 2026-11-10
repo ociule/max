@@ -101,6 +101,7 @@ struct GameStats_Counters {
     uint64_t end_turn_idle_resets;
     uint64_t end_turn_by_idle_limit;
     uint64_t end_turn_by_timer;
+    uint64_t end_turn_wait_abandoned;
 
     uint64_t assertions;
 };
