@@ -23,15 +23,16 @@ INSTRUCTIONS = {
         'You manage construction for your team in M.A.X., a turn-based strategy game on a map of square '
         'cells. Military units are commanded separately; your job is the economy and production that feed '
         'them. The game ends at a turn limit: the team with the most points wins, a tie goes to the team with'
-        ' the most valuable units and buildings, and a team with no Constructor and no factory is eliminated.'
+        ' the most valuable units and buildings. A team is eliminated when it has no armed unit or building, no'
+        ' working factory, and not both a Constructor and an Engineer.'
         ' Each working Eco-sphere scores 1 point every turn, so Eco-spheres built early score the most. An '
         'Eco-sphere holds the points it scored and they are lost when it is destroyed, so Eco-spheres must be'
         ' defended. Choose what this unit does now. Rules, most important first: 1. If your team has no '
         'factory, building one comes first; the Heavy Vehicle Plant is the only factory that makes tanks and '
         'other strong combat units, and new Constructors. 2. A building that needs power does not work while '
         'the base has no spare power; Engineers build Power Generators quickly, so start the factory and let '
-        'an Engineer add power. 3. Keep builders out of danger. If your team has only one Constructor and no '
-        'factory, losing it loses the game. 4. Put mining stations on surveyed resources to raise income, raw'
+        'an Engineer add power. 3. Keep builders out of danger. Until your first factory stands, keep the '
+        'Constructor and an Engineer alive, or an armed unit or a Gun Turret: losing all of them loses the game. 4. Put mining stations on surveyed resources to raise income, raw'
         ' materials first: they pay for everything; surveyors find those resources near the base. Raw '
         'materials mined while the base storage is full are lost, so spend them, build faster or add storage.'
         ' 5. Builders use the raw materials they carry; refill at the base when they carry too little. 6. '
@@ -42,12 +43,15 @@ INSTRUCTIONS = {
         'commanded separately; you choose what this factory produces next, or nothing. A unit takes the given'
         ' number of turns and uses raw materials from your base every turn while it is being built. Rules, '
         'most important first: 1. If your team has only one Constructor, produce another one first when this '
-        'factory can, so that losing a builder does not lose the game. 2. Then produce combat units that '
-        'fight ground units, a mix of strong and long range ones. 3. Raw materials that pile up are wasted, '
+        'factory can, so that losing a builder does not lose the game. 2. Combat units are offered only for '
+        'open places in a task group, long range or front line; fill them. When no group has an open '
+        'place, producing nothing is right: raw materials, power and fuel then go to mines and Eco-spheres. 3. '
+        'Raw materials that pile up are wasted, '
         'and the base loses what it mines while its storage is full: then produce at a faster speed, which '
         'draws more from the base every turn. 4. Produce nothing only when the base cannot afford anything '
         'useful. The base can afford a unit when it mines at least the raw materials the factory uses per '
-        "turn, even when its stock is empty: the factory draws from each turn's mining."),
+        "turn, even when its stock is empty: the factory draws from each turn's mining. Each option shows the "
+        "base's raw materials, fuel, power and workers next turn at that speed; negative means a shortage."),
     'military': (
         'You command one military or support unit of your team in M.A.X., a turn-based strategy game on a map'
         ' of square cells. Construction is managed separately; your job is to find and destroy the enemy '
@@ -57,7 +61,21 @@ INSTRUCTIONS = {
         'or attack them; the enemy goes for the team with the most points, and each Eco-sphere it destroys '
         "takes away the points it holds. 3. Do not move where the danger is higher than this unit's hits "
         'unless it can destroy the enemy there. 4. Otherwise explore to find the enemy: fast units go far, '
-        'slow units stay within a few cells of the base until enemies are found.'),
+        'slow units stay within a few cells of the base until enemies are found. A unit of the Defend group is '
+        'asked only when enemies are near: attack them, or hold its post. A charge closes in on an enemy out of '
+        'reach; it is offered only into ground you see, when the fight estimate says your units win, or as a last '
+        'resort against an enemy that outranges you near your base.'),
+    'command': (
+        'You command the military of your team in M.A.X., a turn-based strategy game. You set the size of your '
+        'task groups; the game moves their units, and factories produce combat units only to fill open places in '
+        'a group. The Defend group holds posts on the way enemies come to your base, on sentry; the Scout group '
+        'searches for the enemy base and watches the way in. Every combat unit costs raw materials that '
+        'Eco-spheres, mines and power also need, and Eco-spheres score the points that win; a team is eliminated '
+        'when it has no armed unit or building, no working factory, and not both a Constructor and an Engineer. '
+        'You are asked only when something changed; the state says what (why_asked) and gives your current plan '
+        'and why you chose it, and the enemy combat units seen near your base. The plan stands unless what changed '
+        'calls for a different one. Choose one change, '
+        'or keep the plan.'),
 }
 
 # What a unit type is for, by engine name. Factories are described by what they make.
@@ -173,6 +191,8 @@ def render_build(o):
     if 'resources' in o:
         r = o['resources']
         text += f", surveyed resources under it raw {r['raw']} fuel {r['fuel']} gold {r['gold']}"
+        if o.get('fuel_for_eco_spheres'):
+            text += ', its fuel runs more Power Generators: the base needs more power than its fuel can make'
         if o.get('joins_base'):
             text += ', joins your base'
         elif 'connectors_needed' in o:
@@ -192,7 +212,10 @@ def render_build(o):
                 text += f", {o['turns_left']} turns left in the game"
         if 'generator' in o:
             g = o['generator']
-            text += f", burns {g['burns_fuel']} fuel per turn for {g['gives_power']} power; your buildings, with " \
+            text += f", burns {g['burns_fuel']} fuel per turn for {g['gives_power']} power"
+            if o.get('for_eco_sphere'):
+                text += ', its power runs an Eco-sphere, which the base has no power for yet'
+            text += "; your buildings, with " \
                 f"those being built, need {g['power_needed']} power and your generators give {g['power_generated']}, " \
                 f"the base mines {g['fuel_mined_max']} fuel per turn at most"
         elif 'needs_power' in o:
@@ -244,24 +267,34 @@ def render_produce(o):
         f"{speed['cost']} raw materials, {describe_stats(o['stats'])}, you have {o['have']}"
     if 'base_mines' in o:
         text += f", uses {speed['per_turn']} raw materials per turn from the base, which mines {o['base_mines']} per turn"
+    if 'group_place' in o:
+        g = o['group_place']
+        text += {'defend_long_range': f", fills a long range place in the Defend group, which has {g['has']} of {g['size']}",
+                 'defend_front': f", fills a front line place in the Defend group, which has {g['has']} of {g['size']}",
+                 'defend_air': f", the Defend group's air defense: enemy aircraft were seen, it has {g['has']} of {g['size']}",
+                 'defend_interceptors': ", fills an interceptor place in the Defend group: it chases enemy raiders such "
+                                        f"as Scouts near the base and the builders, the group has {g['has']} of {g['size']}",
+                 'scouts': f", fills a place in the Scout group, which has {g['has']} of {g['size']}"}[g['group']]
     if 'speed' in o:
         text += f", produced at x{speed['rate']} speed"
     if 'supply' in o:
         s = o['supply']
-        text += '; next-turn balance at this speed, after other buildings and generator switching: ' \
-            f"raw {s['raw_balance']}, fuel {s['fuel_balance']}, power {s['power_balance']}, " \
-            f"workers {s['workers_balance']}, gold {s['gold_balance']}; negative means a shortage without reallocating"
+        text += f"; next turn at this speed: raw {s['raw_balance']}, fuel {s['fuel_balance']}, " \
+            f"power {s['power_balance']}, workers {s['workers_balance']}"
     return text
 
 
 def render_attack(o):
     text = f"attack the enemy {o['target']} at {cell(o['at'])}: it has {o['hits']} of {o['max_hits']} hits, each shot " \
         f"does about {o['damage_per_shot']} damage, you have {o['shots']} shots this turn"
-    text += ', in range now' if o['in_range'] else ', you move closer first'
+    text += ', in range now' if o['in_range'] else (f", you move {o['moves_to_fire']} cells closer first"
+                                                     if 'moves_to_fire' in o else ', you move closer first')
     text += (f", it can shoot back with attack {o['shoots_back_attack']}" if 'shoots_back_attack' in o
              else ', it cannot shoot back')
     if o['destroyable']:
         text += ', it can be destroyed this turn'
+    if o.get('counter_battery'):
+        text += ', counter-battery: it outranges your front line, your long range units silence it first'
     return text
 
 
@@ -291,7 +324,41 @@ def render_picket(o):
         'long range defenses'
 
 
+def render_hold(o):
+    return f"hold: go back to your post in the Defend group at {cell(o['to'])}, {o['distance']} cells away, and wait " \
+        'there on sentry; it fires at enemies that come in range'
+
+
+def render_charge(o):
+    when = 'in range to fire' if o['turns_to_range'] == 0 else \
+        f"in range in {o['turns_to_range']} more turn{'' if o['turns_to_range'] == 1 else 's'}"
+    f = o['fight']
+    text = f"charge the enemy {o['target']} at {cell(o['at'])}, it has {o['hits']} hits: move {o['closer']} cells " \
+        f"toward it to {cell(o['to'])}, {when}; fight estimate over {f['turns']} turn{'' if f['turns'] == 1 else 's'} " \
+        f"with {f['allies']} more of " \
+        f"your units against it and {f['cover']} enemies covering it: " \
+        f"{'it is destroyed' if f['target_destroyed'] else 'it survives'}, you destroy {f['gain']} and lose " \
+        f"{f['loss']} in materials" + (', this unit is destroyed' if f['unit_destroyed'] else '')
+    if o['reason'] == 'last_resort':
+        text += '; a last resort: it outranges you near your base and nothing else of yours can answer it'
+    return text
+
+
+def render_set_defend(o):
+    return f"Defend group of {o['size']} combat units instead of {o['was']} (it has {o['has']}): factories produce " \
+        'combat units until it is full'
+
+
+def render_set_scouts(o):
+    return f"Scout group of {o['size']} instead of {o['was']}: Scouts search for the enemy base and watch the way in"
+
+
 RENDERERS = {
+    'hold': render_hold,
+    'charge': render_charge,
+    'set_defend': render_set_defend,
+    'set_scouts': render_set_scouts,
+    'keep_plan': lambda o: f"keep the plan: Defend group of {o['defend']}, Scout group of {o['scouts']}",
     'survey_base': render_survey_base,
     'search_enemy': render_search_enemy,
     'picket': render_picket,
@@ -307,6 +374,34 @@ RENDERERS = {
                            f"{o['base_raw']}",
     'stay': lambda o: f"stay where it is for the rest of this turn, danger {o['danger']}",
 }
+
+
+# Options that are near copies split Jev's probability: a builder gets every building at several sites and speeds, a
+# factory every unit at several speeds, against a single "stay" or "produce nothing". The top single option is then
+# often "stay" although Jev puts most of its probability on building. In these questions the build (or produce)
+# options count together against each other option, and when they win, the most likely of them is carried out.
+# Other options (moves in different directions, surveying, refills) stay on their own.
+GROUPED_QUESTIONS = ('construction',)
+GROUPED_ACTIONS = ('build', 'produce')
+
+
+def choose(request, reply):
+    """The option to carry out for a reply, from Jev's probabilities; Jev's own pick when grouping does not apply."""
+    probabilities = reply.get('probabilities')
+    name = next(iter(request.get('questions', {})), None)
+    if name not in GROUPED_QUESTIONS or not probabilities or 'options' not in request:
+        return reply['choice']
+    totals = {}
+    for key, probability in probabilities.items():
+        action = request['options'].get(key, {}).get('action')
+        group = action if action in GROUPED_ACTIONS else key
+        totals[group] = totals.get(group, 0) + probability
+    best = max(totals, key=totals.get)
+    if best not in GROUPED_ACTIONS:
+        return best
+    candidates = {key: p for key, p in probabilities.items()
+                  if request['options'].get(key, {}).get('action') == best}
+    return max(candidates, key=candidates.get)
 
 
 def render_option(option):

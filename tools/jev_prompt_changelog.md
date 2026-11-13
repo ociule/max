@@ -3,6 +3,122 @@
 One entry per prompt change tried with `tools/jev_suite.py` or a game batch: what changed, the scores before and
 after, kept or reverted. Newest first. The suite's margin varies by about ±0.03 between runs of the same prompt.
 
+## 2026-11-13: next bundle, not yet tested in a batch (air defense, interceptors, defend on first contact)
+
+From the j7-groups4 logs: classic's first aircraft came on turns 85-95 (an AWAC, then one Ground Attack Plane, which hit
+Jev 12 times in w0 r2 and w9 r1); Jev saw them at turns 85-98, was offered an Anti Aircraft among other builds and
+built 1 in 8 games, and had a Mobile Anti Aircraft in one game. 95 of green's 226 hits on Jev landed on unarmed units.
+
+- Air defense without a question once enemy aircraft or an enemy Air Units Plant are seen (also aircraft spotted
+  during the enemy's turn): builders build up to 2 Anti Aircraft spread among the base's buildings, factories that
+  can produce a Mobile Anti Aircraft do (1 per Defend group, 2 from size 8). Prompt: the air place says "has N of M".
+- The Defend group keeps at least 4 from the first enemy units seen, not from the enemy base found.
+- Interceptors: once enemy units are seen, 2 Scouts beyond the Scout group join the Defend group, wait in the base
+  and chase enemy units seen near the base or within 6 cells of a builder; Jev decides on contact (attack, charge,
+  hold). Prompt: a new production place "interceptor place in the Defend group".
+- Charge rebuilt (the user: a desperation move without vision; with vision good whenever the task group can win, a
+  Tank against an uncovered Scout above all): a charge closes in on an enemy out of reach, by next turn, into ground at
+  least 80% in sight within max(4, the target's range). A fight estimate (`EstimateFight`) simulates up to 3 turns:
+  the unit and the team's armed units and defenses that reach the target this turn or next, against the target and
+  the known enemies that can fire on the charge's end cell (cover); each fires its rounds, attack minus armor per shot,
+  ours at the target first, theirs at the charging unit; the cover fires first while the unit closes in; unseen ground
+  scales the enemy's damage up. Offered when the target is destroyed, the unit survives and the materials destroyed
+  exceed those lost, or as a last resort (an outranging enemy near the base that nothing else of the team can
+  answer), with the estimate in the text. j7-groups4 offered 179 charges in 8 games.
+- Counter-battery: a long range unit with an enemy that outranges the front line in range fires at it without a
+  question, the one nearest destruction first; attack options against such enemies say so.
+- Cheaper construction questions: a builder that can only refill or stay refills without a question (Jev chose the
+  refill 357 of 358 times in j7-groups4, 32% of construction questions); a builder that chose to stay is not asked
+  again until its kinds of choices or its load change, as idle factories are.
+- Fix: counting units in production asserted on a builder that just finished a building (empty build list).
+- Mock checks: m-aa1 (world 0) aircraft seen turn 90, Mobile Anti Aircraft ordered turn 92, Anti Aircraft started
+  turn 93, the Engineer was killed on the way; m-aa2 (world 9) AWAC seen turn 92, Anti Aircraft started turn 93. Both
+  ran to turn 100 without assertions. Harness: `jev_match.py --visible` shows the window; `v1-visible10` (10 turns, Jev
+  vs classic, world 0) finished in 2.7 minutes, 16 questions, no errors.
+
+## 2026-11-13: all-up bundle j3-allup (fast hidden games, one batch for fixes and improvements)
+
+Baseline `j1-base` (dev set, 12 maps, 100 turns, jev-1.14.0, exe 68b14d7-hidden): Jev rank 1 on 8 of 12, worth below
+green on 11; eliminated on worlds 10 and 14, collapsed on 3, 9, 20. Seat baseline `c1-seat` (classic as red, 2 repeats):
+rank 1 on 4.5 of 12, classic almost never scores points.
+
+Bundle `j3-allup` (exe `runs/exes/allup1.exe`), tested together per the all-up procedure:
+- Controller: moves offered only when reachable this turn along the pathfinder's own costs (40-65% of chosen moves
+  failed before, 1-3% in test games); survey and refill destinations need a path; picket sentry in the executing
+  state (an init-state sentry made every end of turn wait for good, world 18 from turn 91); attacks offered only when
+  a firing cell is reachable this turn with a shot left, and ordered as an approach when out of range (the
+  attack-approach patch, rejected on one batch on 2026-11-02, back as part of the bundle); a guard option for ground
+  combat units: a post toward the enemy side of the base, held on sentry. Logs: the classic purchase, and every team's
+  assets by type at game over.
+- Prompts: `choose()` decides construction and production questions in two steps: all build (or produce) options
+  together against each other option, then the most likely of them. On the 12 baseline logs it changes 897 of 3947
+  construction decisions from stay to build and 190 of 468 production decisions from nothing to produce; Jev put
+  most of its probability on building, split over up to 24 near-identical options. Military questions unchanged.
+- Replay, guard option: a wandering Tank (j1-base-w18 question 263) picks guard 2 of 3 times, a tie the third.
+- Dropped before the batch: a base threat fact with a defense-first rule. Production under threat already picked
+  combat units (Tank 37 of 46), and no question offers Eco-spheres and turrets together, so no evidence of need.
+- Result: lost to the harness. The Jev account ran out of credits at world 6 turn 77 (HTTP 402 on every later
+  question); worlds 1, 9, 10, 12, 14, 16, 18, 20, 22 had no answers at all. Valid: world 0 (rank 1, 110 points against
+  38 in the baseline, 3 lost against 7), world 3 (eliminated on turn 85; the baseline game ended at worth 12), world 6
+  to turn 76 (72 points against 0). Bridge, match and batch now stop on a billing error.
+- Found in world 0: 23 Gun Turrets walled in the factory exit; the controller's exit clearing chose unreachable cells
+  (112 of 117 failed moves) and the base built 18 units against 48. Exit clearing now uses the reach map; defenses
+  are not offered next to a factory exit or where three defenses reach already. Next exe: `runs/exes/allup2.exe`.
+
+## 2026-11-13: j7-groups4, first bundle ahead of classic as red (exe groups4)
+
+Quick set, 2 games per map, all valid, 2.30M input tokens, $0.096 ($0.012 per game; j1-base $0.103 per game).
+- First rank in 6 of 8 (classic as red 5 of 8 in c1-seat; j6-groups3 2, j5-groups 4). No elimination. Points in 6
+  games: w0 80 and 108, w3 52 and 0, w6 81 and 62, w9 18 and 0. Eco-spheres 0-2 per game. Promotion criteria met.
+- Hit log: the engine's attacks_landed counts hits on alien units; classic's Scouts shoot alien derelicts (w6:
+  110-129 hits per game). Between the teams: green on red 0-49 per game, red on green 1-44 (w3 game 1: 49 against 44).
+  Of green's hits on Jev: outranged 96, unarmed targets 95 (Constructors, Surveyors, mines), could fire back 35. Ground
+  Attack Planes hit Jev 12 times in w0 game 2 and in w9 game 1; Jev had a Mobile Anti Aircraft in one game only.
+- Tokens: construction 1.52M (66%), military 0.44M, production 0.30M, command 0.03M.
+
+## 2026-11-13: j6-groups3 (exe groups3: event commander, auto survey, long range half, edge posts, charge, gated Eco-spheres)
+
+Quick set (worlds 0, 3, 6, 9), 2 games each, 5.41M input tokens, $0.227 ($0.028 per game: cost target met). All valid.
+- First rank in 2 of 8 (j5-groups 4, classic as red 5). World 3 not eliminated for the first time (rank 1 with 26
+  points, rank 2); world 9 game 2 eliminated on turn 100 after the commander shrank the Defend group to 2 on turn 50
+  while green grew from 12 to 38 units (no charges in that game). Losses fell on most maps (w0 5/2, w6 3/1).
+- Points collapsed: Eco-spheres built 0-1 per game against 1-6 in j5-groups (w6: 150 and 30 points -> 0 and 0).
+  Cause: the new rule "Eco-sphere only when it can run" removed the option from turn 29 to 85 on world 6 (no spare
+  power), and Jev never built the power that would bring it back. In j5-groups Eco-spheres were built on turns 28-36
+  and scored once power followed. Reverted for the next batch.
+- Charge chosen 14 times (Tanks against Assault Guns and Rocket Launchers at range 7). Commander questions: 2-5 per
+  game (was ~12). Construction tokens 1.36M (was 3.66M) with Surveyors on auto survey.
+
+## 2026-11-13: j5-groups, task groups with Jev as commander (exe groups1)
+
+Worlds 0, 3, 6, 9, 2 games each (cut from 24 by the user), jev-1.14.0, 7.9M input tokens ($0.33, $0.041 per game;
+j4-allup2 $0.060, j1-base $0.103). All 8 valid: no abandoned waits, assertions or API errors; failed moves 0-8%.
+- Ranks: Jev first in 4 of 8 games (w0 2/1, w3 eliminated twice on turns 95/96, w6 1/1, w9 1/2); classic as red
+  first in 5 of 8 on the same maps. Points: w6 150 and 30, w9 118 (first points on w9 in any batch), w0 0 and 8
+  (j1-base 38). Worth minus green per map, mean of the 2 games: w0 -521, w3 -994, w6 -350, w9 -890.
+- Not promoted: fewer first ranks than classic as red; Eco-sphere turns without power 1-44 per game (w0 1 and 21
+  against 40 in j4-allup2, w3 41 and 20 against 0); cost $0.041 per game against the $0.029 target.
+- Commander: flips the Defend group between 2 and 4 at almost every trigger and rarely keeps the plan; it is asked
+  without its previous choices. w3 lost 39 and 46 units with a Defend group of 2-4.
+- Tokens: construction 3.66M (46%), military 3.05M, production 1.08M, command 0.09M. Surveyors alone 2.27M (1233
+  questions, 1845 tokens each): surveying is the largest cost now.
+
+## 2026-11-13: j4-allup2, the bundle rerun (exe allup2: plus exit clearing and turret limits)
+
+Dev set, one game at a time, jev-1.14.0, 17.1M input tokens ($0.72; baseline 29.5M, $1.24). Per map against
+`j1-base`: rank 1 on 7 of 12 in both; mean worth minus green -601 -> -510; points 268 -> 308 (w12 30 -> 106,
+w16 54 -> 108, w22 14 -> 37; w0 38 -> 0, w1 69 -> 16); w10 eliminated -> rank 1; w3 eliminated on turn 10 (baseline
+ended rank 2 at worth 12); w18 hit the 5M token cap per game on turn 95 (4145 questions) in both batches.
+Not promoted by the rule in the plan: a new elimination (w3) and no clear gain.
+
+- w3: the real loss rule (default script SC_L0002 in PATCHES.RES) keeps a team while it has any unit or building
+  with ammunition, or a supplied factory, or a Constructor and an Engineer with materials. Jev's instructions say "no
+  Constructor and no factory". An Assault Gun killed the Missile Crawler and both Engineers before the first factory
+  stood: eliminated with its Constructor alive.
+- w0: Eco-spheres off for 33 turns from turn 58, no fuel and no spare power, Mining Station and a generator off,
+  29 Tanks produced. Grouped production turned 190 baseline "produce nothing" decisions into production; nothing
+  was how Jev left power and materials to the Eco-spheres. Grouping stays a candidate for construction only.
+
 ## 2026-11-03: speed-specific forecasts, mine recovery, construction guards
 
 - Recovered completed `b18-scout-wall` (100 turns, worlds/seeds 0:42, 3:7, 6:13,

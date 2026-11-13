@@ -24,10 +24,15 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <set>
+#include <tuple>
 #include <climits>
 #include <cmath>
 
 #include "access.hpp"
+#include "ai.hpp"
+#include "aiplayer.hpp"
+#include "accessmap.hpp"
 #include "builder.hpp"
 #include "buildmenu.hpp"
 #include "cargo.hpp"
@@ -58,6 +63,14 @@ static constexpr uint64_t JevAi_UnitTimeout = 30000;
 /// Turns a builder keeps walking to a chosen building site.
 static constexpr int32_t JevAi_SiteWalkTurns = 3;
 
+/// Anti Aircraft turrets built without a question once enemy aircraft are seen (the user, 2026-11-13: an aircraft
+/// sighting is the signal for air defense; j7-groups4: offered as one option among many, two were built in 8 games)
+static constexpr int32_t JevAi_AntiAirTurrets = 2;
+
+/// Scouts of the Defend group that chase raiders once enemy units are seen (the user, 2026-11-13: the first enemy
+/// units are mostly Scouts, own Scouts answer them; j7-groups4: 95 of 226 enemy hits landed on unarmed units)
+static constexpr int32_t JevAi_Interceptors = 2;
+
 /// Cells around a builder searched for building sites.
 static constexpr int32_t JevAi_SiteSearchRadius = 6;
 
@@ -86,6 +99,14 @@ static const char* const JevAi_FactoryInstructions =
     "team has only one Constructor, produce another one first when this factory can, so that losing a builder does "
     "not lose the game. 2. Then produce combat units that fight ground units, a mix of strong and long range ones. 3. "
     "Produce nothing only when the base cannot afford anything useful.";
+
+static const char* const JevAi_CommandInstructions =
+    "You command the military of your team in M.A.X., a turn-based strategy game. You set the size of your task "
+    "groups; the game moves their units, and factories produce combat units only to fill open places in a group. The "
+    "Defend group holds posts on the way enemies come to your base, on sentry; the Scout group searches for the enemy "
+    "base and watches the way in. Every combat unit costs raw materials that Eco-spheres, mines and power also need, "
+    "and Eco-spheres score the points that win. You are asked only when something changed; the plan stands unless "
+    "that calls for a different one. Choose one change, or keep the plan.";
 
 static const char* const JevAi_MilitaryInstructions =
     "You command one military or support unit of your team in M.A.X., a turn-based strategy game on a map of square "
@@ -168,6 +189,13 @@ static bool JevAi_IsGroundCombatUnit(uint16_t team, ResourceID unit_type) {
            UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[team], unit_type)->GetAttribute(ATTRIB_ATTACK) >
                0 &&
            Access_IsValidAttackTargetType(unit_type, TANK);
+}
+
+/// A ground combat unit that outranges a Tank: Assault Gun, Rocket Launcher, Missile Crawler.
+static bool JevAi_IsLongRange(uint16_t team, ResourceID unit_type) {
+    return JevAi_IsGroundCombatUnit(team, unit_type) &&
+           UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[team], unit_type)->GetAttribute(ATTRIB_RANGE) >
+               UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[team], TANK)->GetAttribute(ATTRIB_RANGE);
 }
 
 static int32_t JevAi_GetSize(ResourceID unit_type) {
@@ -742,16 +770,19 @@ bool JevAi::ClearExit(UnitInfo* parent) {
             continue;
         }
 
-        // the nearest free cell that is no factory exit
+        // the cheapest free cell that is no factory exit and that the blocker reaches this turn
         Point best;
         int32_t best_distance = INT32_MAX;
+
+        ComputeReach(blocker);
 
         for (int32_t x = cell.x - 4; x <= cell.x + 4; ++x) {
             for (int32_t y = cell.y - 4; y <= cell.y + 4; ++y) {
                 const Point target(x, y);
-                const int32_t distance = Access_GetSquaredDistance(target, cell);
+                const int32_t distance = GetReachCost(target);
 
-                if (JevAi_IsInsideMap(target) && distance > 1 && distance < best_distance && !IsFactoryExit(target) &&
+                if (JevAi_IsInsideMap(target) && distance > 0 && distance <= blocker->speed &&
+                    distance < best_distance && !IsFactoryExit(target) &&
                     Access_IsAccessible(blocker->GetUnitType(), m_team, x, y, AccessModifier_SameClassBlocks)) {
                     best = target;
                     best_distance = distance;
@@ -829,7 +860,8 @@ nlohmann::ordered_json JevAi::GetDefenseCoverage(ResourceID unit_type, Point sit
             covers[name] = covers.value(name, 0) + 1;
         }
 
-        if (JevAi_IsDefense((*it).GetUnitType()) && distance <= (*it).GetBaseValues()->GetAttribute(ATTRIB_RANGE)) {
+        if (JevAi_IsDefense((*it).GetUnitType()) && ((*it).GetUnitType() == ANTIAIR) == (unit_type == ANTIAIR) &&
+            distance <= (*it).GetBaseValues()->GetAttribute(ATTRIB_RANGE)) {
             ++defenses;
         }
     }
@@ -879,6 +911,21 @@ void JevAi::RememberEnemies() {
                        [turn](const Sighting& item) { return !item.building && turn - item.turn > unit_memory_turns; }),
         m_sightings.end());
 
+    // enemy combat units in reach of the base this turn, and how many outrange a Tank
+    Point center;
+    int32_t extent = 0;
+    const bool has_center = GetBaseCenter(center, extent);
+    const int32_t tank_range = UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], TANK)->GetAttribute(ATTRIB_RANGE);
+    int32_t near_base = 0;
+    int32_t outranging = 0;
+
+    // aircraft fly anywhere: they say nothing about the way in, only that air defense is needed
+    for (auto it = UnitsManager_MobileAirUnits.Begin(), it_end = UnitsManager_MobileAirUnits.End(); it != it_end; ++it) {
+        if ((*it).team != m_team && (*it).team != PLAYER_TEAM_ALIEN && (*it).hits > 0 && (*it).IsVisibleToTeam(m_team)) {
+            UnitSpotted(it->Get());
+        }
+    }
+
     for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_StationaryUnits}) {
         for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
             if ((*it).team == m_team || (*it).team == PLAYER_TEAM_ALIEN || (*it).hits == 0 ||
@@ -886,19 +933,55 @@ void JevAi::RememberEnemies() {
                 continue;
             }
 
+            m_enemy_seen = true;
+            m_enemy_base_seen = m_enemy_base_seen || ((*it).flags & STATIONARY);
+
+            // an Air Units Plant announces aircraft: air defense takes 6 turns to build (m-aa1: the first Ground
+            // Attack Plane came on turn 90 and killed the Engineer on its way to the Anti Aircraft site)
+            if ((*it).GetUnitType() == AIRPLT && !m_enemy_air_seen) {
+                m_enemy_air_seen = true;
+
+                SDL_Log("Jev %s: enemy Air Units Plant seen at %s: air defense comes first now.", GetTeamName(),
+                        JevAi_FormatPoint(Point((*it).grid_x, (*it).grid_y)).c_str());
+            }
+            // the Defend group answers the first enemy units, not only the enemy base (the user, 2026-11-13)
+            m_defend_size = std::max(m_defend_size, 4);
+
             const Point at((*it).grid_x, (*it).grid_y);
             const bool building = ((*it).flags & STATIONARY) != 0;
+            const int32_t range =
+                (*it).GetBaseValues()->GetAttribute(ATTRIB_ATTACK) > 0 ? (*it).GetBaseValues()->GetAttribute(ATTRIB_RANGE)
+                                                                        : 0;
+
+            if (!building && range > 0) {
+                m_enemy_army[(*it).GetId()] = {turn, range > tank_range};
+            }
+
+            if (!building && range > 0 && has_center && JevAi_GetDistance(center, at) <= extent + 15) {
+                ++near_base;
+                outranging += range > tank_range;
+            }
             auto known = std::find_if(m_sightings.begin(), m_sightings.end(),
                                       [at](const Sighting& item) { return item.at == at; });
 
             if (known != m_sightings.end()) {
                 known->turn = turn;
                 known->building = known->building || building;
+                known->range = std::max(known->range, range);
 
             } else {
-                m_sightings.push_back({at, turn, building});
+                m_sightings.push_back({at, turn, building, range});
             }
         }
+    }
+    m_threats.push_back({turn, near_base, outranging});
+
+    for (auto item = m_enemy_army.begin(); item != m_enemy_army.end();) {
+        item = (turn - item->second.first > 15) ? m_enemy_army.erase(item) : std::next(item);
+    }
+
+    if (m_threats.size() > 10) {
+        m_threats.erase(m_threats.begin());
     }
 }
 
@@ -1031,7 +1114,7 @@ std::vector<Point> JevAi::GetLinkCells(UnitInfo* builder) const {
     return cells;
 }
 
-std::vector<Point> JevAi::FindMineSites(UnitInfo* builder) const {
+std::vector<Point> JevAi::FindMineSites(UnitInfo* builder, bool fuel_first) const {
     // the richest surveyed sites around the base that join it: a mine away from the base has no power
     constexpr int32_t search_radius = 14;
     constexpr int32_t maximum_sites = 3;
@@ -1068,8 +1151,9 @@ std::vector<Point> JevAi::FindMineSites(UnitInfo* builder) const {
                 continue;
             }
 
-            // raw materials pay for everything, fuel only runs generators
-            candidates.push_back({raw * 2 + fuel + gold - static_cast<int32_t>(path.size()), site});
+            // raw materials pay for everything, fuel only runs generators; fuel first when power waits for it
+            candidates.push_back(
+                {(fuel_first ? raw + fuel * 3 : raw * 2 + fuel) + gold - static_cast<int32_t>(path.size()), site});
         }
     }
 
@@ -1141,9 +1225,11 @@ bool JevAi::GetEnemyDirection(Point& origin) const {
 std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_type) const {
     // a few distinct legal sites by role, best first. Gun Turrets form a wall on the outside of the base, on the side
     // the enemy comes from; long range defenses stand behind it, inside the base's edge, covering the way in
-    constexpr int32_t maximum_sites = 3;
+    constexpr int32_t maximum_sites = 2;
     const bool is_wall = unit_type == GUNTURRT;
-    const int32_t minimum_spacing = is_wall ? 2 : 3;
+    // aircraft come from any side: air defense covers the base's buildings, spread out
+    const bool is_air = unit_type == ANTIAIR;
+    const int32_t minimum_spacing = is_wall ? 2 : (is_air ? 4 : 3);
     const int32_t range =
         UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], unit_type)->GetAttribute(ATTRIB_RANGE);
     const Point position(builder->grid_x, builder->grid_y);
@@ -1184,11 +1270,11 @@ std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_ty
             const double facing =
                 ((x - center.x) * toward_x + (y - center.y) * toward_y) / (std::max(1, from_center) * toward_length);
 
-            if (facing < 0.3) {
+            if (facing < 0.3 && !is_air) {
                 continue;
             }
 
-            int64_t score = static_cast<int64_t>(facing * 20);
+            int64_t score = is_air ? 0 : static_cast<int64_t>(facing * 20);
 
             for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End();
                  it != it_end; ++it) {
@@ -1210,7 +1296,7 @@ std::vector<Point> JevAi::FindDefenseSites(UnitInfo* builder, ResourceID unit_ty
             }
 
             for (const Point cell : approach) {
-                score += JevAi_GetDistance(site, cell) <= range ? 15 : 0;
+                score += (!is_air && JevAi_GetDistance(site, cell) <= range) ? 15 : 0;
             }
 
             score -= JevAi_GetDistance(site, position);
@@ -1547,6 +1633,75 @@ UnitInfo* JevAi::FindIdleFactory() const {
     return nullptr;
 }
 
+void JevAi::ComputeReach(UnitInfo* unit) {
+    // the costs a move order's path request uses (Paths_RequestPath, PathsManager): cell costs in quarter movement
+    // points, diagonal steps 1.5 times, each step rounded up to whole points as Paths_CalculateStep charges them
+    const Point size = ResourceManager_MapSize;
+    AccessMap map(ResourceManager_GetActiveWorld());
+    std::vector<std::pair<int32_t, int32_t>> queue;
+    const auto later = [](const std::pair<int32_t, int32_t>& a, const std::pair<int32_t, int32_t>& b) {
+        return a.first > b.first;
+    };
+
+    map.Init(unit, AccessModifier_SameClassBlocks, CAUTION_LEVEL_NONE);
+    m_reach.assign(size.x * size.y, -1);
+
+    if (!JevAi_IsInsideMap(Point(unit->grid_x, unit->grid_y))) {
+        return;
+    }
+
+    m_reach[unit->grid_x * size.y + unit->grid_y] = 0;
+    queue.push_back({0, unit->grid_x * size.y + unit->grid_y});
+
+    while (!queue.empty()) {
+        std::pop_heap(queue.begin(), queue.end(), later);
+        const auto [cost, index] = queue.back();
+        queue.pop_back();
+
+        if (cost > m_reach[index]) {
+            continue;
+        }
+
+        const Point cell(index / size.y, index % size.y);
+
+        for (int32_t direction = 0; direction < 8; ++direction) {
+            const Point next = cell + DIRECTION_OFFSETS[direction];
+
+            if (!JevAi_IsInsideMap(next)) {
+                continue;
+            }
+
+            int32_t step = map(next.x, next.y) & 0x1F;
+
+            if (step == 0) {
+                continue;
+            }
+
+            if (DIRECTION_OFFSETS[direction].x != 0 && DIRECTION_OFFSETS[direction].y != 0) {
+                step = (step * 3) / 2;
+            }
+
+            const int32_t next_cost = cost + (step + 3) / 4;
+            const int32_t next_index = next.x * size.y + next.y;
+
+            if (m_reach[next_index] < 0 || next_cost < m_reach[next_index]) {
+                m_reach[next_index] = next_cost;
+                queue.push_back({next_cost, next_index});
+                std::push_heap(queue.begin(), queue.end(), later);
+            }
+        }
+    }
+}
+
+int32_t JevAi::GetReachCost(Point cell) const {
+    if (!JevAi_IsInsideMap(cell) || m_reach.size() != static_cast<size_t>(ResourceManager_MapSize.x) *
+                                                          static_cast<size_t>(ResourceManager_MapSize.y)) {
+        return -1;
+    }
+
+    return m_reach[cell.x * ResourceManager_MapSize.y + cell.y];
+}
+
 void JevAi::AddMoveOptions(UnitInfo* unit) {
     const Point position(unit->grid_x, unit->grid_y);
     const int32_t scan = unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN);
@@ -1585,6 +1740,13 @@ void JevAi::AddMoveOptions(UnitInfo* unit) {
 
             // factory exits stay free for the units they release
             if (IsFactoryExit(destination)) {
+                continue;
+            }
+
+            // a straight line can cross buildings, water or rough ground: offer only what the unit reaches this turn
+            const int32_t reach = GetReachCost(destination);
+
+            if (reach < 0 || reach > speed) {
                 continue;
             }
 
@@ -1744,6 +1906,25 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
         }
     }
 
+    // an Eco-sphere is wanted when a factory stands and a worker is free; without power it scores nothing, so the
+    // power chain comes first: a Power Generator when the fuel runs one more, else a mine on fuel (the user: Jev
+    // builds the power and the Eco-spheres)
+    const int32_t eco_power = Cargo_GetPowerConsumptionRate(GREENHSE);
+    const bool eco_needs_power =
+        factories > 0 && workers_given - workers_needed >= 1 && power_generated - power_needed < eco_power;
+    // power planned: the buildings and those being built, the first factory, a wanted Eco-sphere; when the fuel mined
+    // cannot run the generators that takes, a mine on fuel comes first (the user: a fuel mine when fuel and power are
+    // needed or planned to be needed)
+    const int32_t first_factory_power =
+        (CountOwnUnits(LANDPLT) + CountOwnUnits(LIGHTPLT) == 0) ? Cargo_GetPowerConsumptionRate(LANDPLT) : 0;
+    const int32_t power_planned = power_needed + first_factory_power + (eco_needs_power ? eco_power : 0);
+    const int32_t generators_planned =
+        generators + std::max(0, (power_planned - power_generated + -Cargo_GetPowerConsumptionRate(POWGEN) - 1) /
+                                     std::max(1, -Cargo_GetPowerConsumptionRate(POWGEN)));
+    const bool eco_needs_fuel = power_planned > power_generated &&
+                                fuel_mining_capacity.fuel + idle_mine_fuel <
+                                    generators_planned * Cargo_GetFuelConsumptionRate(POWGEN);
+
     for (const ResourceID unit_type : Builder_GetBuildableUnits(m_team, builder->GetUnitType())) {
         Point found_site;
 
@@ -1753,7 +1934,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             const int32_t factory_power =
                 (CountOwnUnits(LANDPLT) + CountOwnUnits(LIGHTPLT) == 0) ? Cargo_GetPowerConsumptionRate(LANDPLT) : 0;
 
-            if (power_needed + factory_power <= power_generated ||
+            if (power_needed + factory_power + (eco_needs_power ? eco_power : 0) <= power_generated ||
                 fuel_mining_capacity.fuel + idle_mine_fuel < (generators + 1) * Cargo_GetFuelConsumptionRate(POWGEN)) {
                 continue;
             }
@@ -1770,9 +1951,17 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 continue;
             }
 
+            // an Eco-sphere without power scores nothing: only while the generators have power to spare or the fuel
+            // mined runs one more generator (j5-groups world 6: 8 fuel ran 4 generators, the fifth Eco-sphere idled)
+            if (unit_type == GREENHSE &&
+                power_generated - power_needed < Cargo_GetPowerConsumptionRate(GREENHSE) &&
+                fuel_mining_capacity.fuel + idle_mine_fuel < (generators + 1) * Cargo_GetFuelConsumptionRate(POWGEN)) {
+                continue;
+            }
+
         } else if (unit_type == RADAR) {
-            // defenses are offered before the first enemy is seen; the Radar waits for it
-            if (!enemies_seen) {
+            // vision around the base: the first Radar once a factory stands, a second one once the enemy is seen
+            if (factories == 0 || CountOwnUnits(RADAR) >= (enemies_seen ? 2 : 1)) {
                 continue;
             }
 
@@ -1788,17 +1977,22 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 continue;
             }
 
+        } else if (unit_type == ANTIAIR) {
+            if (!m_enemy_air_seen) {
+                continue;
+            }
+
         } else if (unit_type != MININGST && unit_type != GUNTURRT && unit_type != ANTIMSSL && unit_type != ARTYTRRT) {
             continue;
         }
 
         std::vector<Point> sites;
 
-        if (unit_type == GUNTURRT || unit_type == ANTIMSSL || unit_type == ARTYTRRT) {
+        if (unit_type == GUNTURRT || unit_type == ANTIMSSL || unit_type == ARTYTRRT || unit_type == ANTIAIR) {
             sites = FindDefenseSites(builder, unit_type);
 
         } else if (unit_type == MININGST) {
-            sites = FindMineSites(builder);
+            sites = FindMineSites(builder, eco_needs_fuel);
 
         } else if (unit_type == CNCT_4W) {
             sites = GetLinkCells(builder);
@@ -1815,6 +2009,22 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             const int32_t cost = turns * rate;
             if (cost > builder->storage) {
                 continue;
+            }
+
+            if (JevAi_IsDefense(unit_type)) {
+                // a defense next to a factory exit walls in the units it releases (j3-allup world 0: 23 Gun Turrets,
+                // a Tank stuck on the exit); a spot that three defenses reach already gains little from a fourth
+                bool walls_exit = false;
+
+                for (int32_t dx = -1; dx <= 1 && !walls_exit; ++dx) {
+                    for (int32_t dy = -1; dy <= 1 && !walls_exit; ++dy) {
+                        walls_exit = IsFactoryExit(Point(site.x + dx, site.y + dy));
+                    }
+                }
+
+                if (walls_exit || GetDefenseCoverage(unit_type, site)["defenses_covering_site"].get<int32_t>() >= 3) {
+                    continue;
+                }
             }
             const bool covers_builder = (site.x == builder->grid_x || site.x + 1 == builder->grid_x) &&
                                         (site.y == builder->grid_y || site.y + 1 == builder->grid_y);
@@ -1850,6 +2060,11 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
 
                 facts += ", surveyed resources under it raw " + std::to_string(raw) + " fuel " + std::to_string(fuel) +
                          " gold " + std::to_string(gold);
+
+                if (eco_needs_fuel && fuel > 0) {
+                    facts += ", its fuel runs more Power Generators: the base needs more power than its fuel can make";
+                    data["fuel_for_eco_spheres"] = true;
+                }
                 data["resources"] = {{"raw", raw}, {"fuel", fuel}, {"gold", gold}};
 
                 // what the base mines now, to compare with
@@ -1923,6 +2138,11 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                              " power; your buildings, with those being built, need " + std::to_string(power_needed) +
                              " power and your generators give " + std::to_string(power_generated) +
                              ", the base mines " + std::to_string(fuel_mining_capacity.fuel) + " fuel per turn at most";
+                    if (eco_needs_power) {
+                        facts += ", its power runs an Eco-sphere, which the base has no power for yet";
+                        data["for_eco_sphere"] = true;
+                    }
+
                     data["generator"] = {{"burns_fuel", Cargo_GetFuelConsumptionRate(POWGEN)},
                                          {"gives_power", -Cargo_GetPowerConsumptionRate(POWGEN)},
                                          {"power_needed", power_needed},
@@ -2036,7 +2256,8 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
             int32_t fastest_turns = normal_turns;
             const Option normal = m_options.back();
 
-            for (const int32_t rate : {2, 4}) {
+            // one faster row, the fastest the cargo pays for: fewer near copies, fewer tokens
+            for (const int32_t rate : {4, 2}) {
                 int32_t speed_turns;
                 const int32_t speed_cost = builder->GetTurnsToBuild(unit_type, rate, &speed_turns);
 
@@ -2054,6 +2275,7 @@ void JevAi::AddBuildOptions(UnitInfo* builder) {
                 fast.data["speed"] = {{"rate", rate}, {"turns", speed_turns}, {"cost", speed_cost}};
                 fastest_turns = speed_turns;
                 m_options.push_back(fast);
+                break;
             }
         }
     }
@@ -2083,13 +2305,91 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
         option.data["supply"] = {{"raw_balance", balance.raw}, {"fuel_balance", balance.fuel},
                                  {"power_balance", balance.power}, {"workers_balance", balance.life},
                                  {"gold_balance", balance.gold}};
-        option.facts += "; next-turn balance at this speed, after other buildings and generator switching: raw " +
-                        std::to_string(balance.raw) + ", fuel " + std::to_string(balance.fuel) + ", power " +
-                        std::to_string(balance.power) + ", workers " + std::to_string(balance.life) + ", gold " +
-                        std::to_string(balance.gold) + "; negative means a shortage without reallocating";
+        option.facts += "; next turn at this speed: raw " + std::to_string(balance.raw) + ", fuel " +
+                        std::to_string(balance.fuel) + ", power " + std::to_string(balance.power) + ", workers " +
+                        std::to_string(balance.life);
     };
 
+    int32_t anti_air = 0;
+    const int32_t combat = CountDefenders(&anti_air) - anti_air;
+    // half of the Defend group outranges a Tank, so that it can answer artillery; the other half holds the front line
+    int32_t long_range = 0;
+
+    for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
+         it != it_end; ++it) {
+        long_range += IsDefender(it->Get()) && JevAi_IsLongRange(m_team, (*it).GetUnitType());
+    }
+
+    const int32_t long_range_size = (m_defend_size + 1) / 2;
+    const int32_t long_range_open = long_range_size - long_range - CountInProduction(false, false, false, false, true);
+    const int32_t front_open =
+        (m_defend_size - long_range_size) - (combat - long_range) - (CountInProduction(true, false, false) -
+                                                                     CountInProduction(false, false, false, false, true));
+    // one Mobile Anti Aircraft per Defend group of up to 7, two for a larger one
+    const int32_t anti_air_size = m_enemy_air_seen ? 1 + m_defend_size / 8 : 0;
+    const int32_t anti_air_open = anti_air_size - anti_air - CountInProduction(false, true, false);
+    const int32_t scouts = CountOwnUnits(SCOUT);
+    const int32_t interceptor_size = m_enemy_seen ? JevAi_Interceptors : 0;
+    const int32_t interceptors = static_cast<int32_t>(m_interceptors.size());
+    const int32_t scouts_open = m_scout_size + interceptor_size - scouts - CountInProduction(false, false, true);
+
+
     for (const ResourceID unit_type : Builder_GetBuildableUnits(m_team, factory->GetUnitType())) {
+        // units serve a group or the economy; a combat unit only fills an open place in the Defend group
+        std::string place;
+        json place_data;
+
+        if (JevAi_IsGroundCombatUnit(m_team, unit_type)) {
+            const bool is_long_range = JevAi_IsLongRange(m_team, unit_type);
+
+            if ((is_long_range ? long_range_open : front_open) <= 0) {
+                continue;
+            }
+
+            place = ", fills a " + std::string(is_long_range ? "long range" : "front line") +
+                    " place in the Defend group, which has " +
+                    std::to_string(is_long_range ? long_range : combat - long_range) + " of " +
+                    std::to_string(is_long_range ? long_range_size : m_defend_size - long_range_size);
+            place_data = {{"group", is_long_range ? "defend_long_range" : "defend_front"},
+                          {"has", is_long_range ? long_range : combat - long_range},
+                          {"size", is_long_range ? long_range_size : m_defend_size - long_range_size}};
+
+        } else if (unit_type == SP_FLAK) {
+            if (anti_air_open <= 0) {
+                continue;
+            }
+
+            place = ", the Defend group's air defense: enemy aircraft were seen, it has " + std::to_string(anti_air) +
+                    " of " + std::to_string(anti_air_size);
+            place_data = {{"group", "defend_air"}, {"has", anti_air}, {"size", anti_air_size}};
+
+        } else if (unit_type == SCOUT) {
+            if (scouts_open <= 0) {
+                continue;
+            }
+
+            if (interceptors < interceptor_size) {
+                place = ", fills an interceptor place in the Defend group: it chases enemy raiders such as Scouts "
+                        "near the base and the builders, the group has " + std::to_string(interceptors) + " of " +
+                        std::to_string(interceptor_size);
+                place_data = {{"group", "defend_interceptors"}, {"has", interceptors}, {"size", interceptor_size}};
+
+            } else {
+                place = ", fills a place in the Scout group, which has " + std::to_string(scouts - interceptors) +
+                        " of " + std::to_string(m_scout_size);
+                place_data = {{"group", "scouts"}, {"has", scouts - interceptors}, {"size", m_scout_size}};
+            }
+
+        } else if (unit_type == SURVEYOR) {
+            // Surveyors survey by themselves; five cover the ground the base can use
+            if (CountOwnUnits(SURVEYOR) + CountInProduction(false, false, false, true) >= 5) {
+                continue;
+            }
+
+        } else if (unit_type != CONSTRCT && unit_type != ENGINEER) {
+            continue;
+        }
+
         const int32_t turns = BuildMenu_GetTurnsToBuild(unit_type, m_team);
         std::string facts = "produce a " + JevAi_GetTypeName(unit_type) + ": " +
                             JevAi_DescribePurpose(m_team, unit_type) + " " + std::to_string(turns) + " turns, " +
@@ -2122,7 +2422,11 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
         // the stock can be empty while the income pays for production: say both
         m_options.back().facts += ", uses " + std::to_string(rate) +
                                   " raw materials per turn from the base, which mines " + std::to_string(mining.raw) +
-                                  " per turn";
+                                  " per turn" + place;
+
+        if (!place_data.is_null()) {
+            m_options.back().data["group_place"] = place_data;
+        }
 
         // the faster rows: a factory draws more raw materials from the base each turn, which spends a surplus
         const Option normal = m_options.back();
@@ -2132,7 +2436,7 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
 
         factory->GetTurnsToBuild(unit_type, 1, &fastest_turns);
 
-        for (const int32_t speed : {2, 4}) {
+        for (const int32_t speed : {4, 2}) {
             int32_t speed_turns;
             const int32_t speed_cost = factory->GetTurnsToBuild(unit_type, speed, &speed_turns);
             const int32_t per_turn = Cargo_GetRawConsumptionRate(factory->GetUnitType(), speed);
@@ -2157,6 +2461,7 @@ void JevAi::AddProduceOptions(UnitInfo* factory) {
             add_supply(fast, speed);
             fastest_turns = speed_turns;
             m_options.push_back(fast);
+            break;
         }
     }
 
@@ -2283,6 +2588,1080 @@ void JevAi::AddScoutOptions(UnitInfo* scout) {
                           {"enemy_at", JevAi_PointData(origin)}}});
 }
 
+bool JevAi::IsDefender(UnitInfo* unit) const {
+    // every ground combat unit and every Mobile Anti Aircraft belongs to the Defend group; Scouts and Scanners scout
+    return unit->team == m_team && (unit->flags & MOBILE_LAND_UNIT) && unit->hits > 0 &&
+           (JevAi_IsGroundCombatUnit(m_team, unit->GetUnitType()) || unit->GetUnitType() == SP_FLAK);
+}
+
+int32_t JevAi::CountDefenders(int32_t* anti_air) const {
+    int32_t count = 0;
+
+    if (anti_air) {
+        *anti_air = 0;
+    }
+
+    for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
+         it != it_end; ++it) {
+        if (IsDefender(it->Get())) {
+            ++count;
+
+            if (anti_air && (*it).GetUnitType() == SP_FLAK) {
+                ++*anti_air;
+            }
+        }
+    }
+
+    return count;
+}
+
+int32_t JevAi::CountInProduction(bool combat, bool anti_air, bool scout, bool surveyor, bool long_range) const {
+    int32_t count = 0;
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        if ((*it).team != m_team || (*it).hits == 0 || !JevAi_IsFactory((*it).GetUnitType()) ||
+            (*it).GetOrder() != ORDER_BUILD || (*it).GetOrderState() == ORDER_STATE_UNIT_READY ||
+            (*it).GetBuildList().GetCount() == 0) {
+            continue;
+        }
+
+        const ResourceID product = (*it).GetConstructedUnitType();
+
+        if (product == INVALID_ID) {
+            continue;
+        }
+
+        count += (combat && JevAi_IsGroundCombatUnit(m_team, product)) || (anti_air && product == SP_FLAK) ||
+                 (scout && product == SCOUT) || (surveyor && product == SURVEYOR) ||
+                 (long_range && JevAi_IsLongRange(m_team, product));
+    }
+
+    return count;
+}
+
+bool JevAi::GetThreatAnchor(Point& anchor, Point& origin, bool& enemy_known) const {
+    // the middle of the Defend group's posts: a few cells out from the base toward where the enemy comes from, the
+    // map center before the enemy is known
+    Point center;
+    int32_t extent;
+
+    if (!GetBaseCenter(center, extent)) {
+        return false;
+    }
+
+    enemy_known = GetEnemyDirection(origin);
+
+    const int32_t length = std::max(1, JevAi_GetDistance(center, origin));
+    // at the edge of the base, between the buildings and the way in: defenders stay where the base's own turrets help
+    // (j5-groups world 3: posts 3 cells beyond the edge stood within reach of the enemy base 15 cells away)
+    const int32_t out = std::min(length - 1, std::max(2, extent + 1));
+
+    anchor = Point(center.x + (origin.x - center.x) * out / length, center.y + (origin.y - center.y) * out / length);
+
+    return true;
+}
+
+bool JevAi::FindPost(UnitInfo* unit, Point anchor, Point& post) const {
+    // the free cell nearest the anchor that the unit can reach, apart from the other posts; needs ComputeReach(unit)
+    int64_t best = INT64_MAX;
+
+    for (int32_t radius_x = -5; radius_x <= 5; ++radius_x) {
+        for (int32_t radius_y = -5; radius_y <= 5; ++radius_y) {
+            const Point cell(anchor.x + radius_x, anchor.y + radius_y);
+
+            if (!JevAi_IsInsideMap(cell) || GetReachCost(cell) < 0 || IsFactoryExit(cell) ||
+                !(cell == Point(unit->grid_x, unit->grid_y) ||
+                  Access_IsAccessible(unit->GetUnitType(), m_team, cell.x, cell.y, AccessModifier_SameClassBlocks))) {
+                continue;
+            }
+
+            // never within reach of a known enemy defense, with a margin of two cells
+            if (std::any_of(m_sightings.begin(), m_sightings.end(), [&](const Sighting& sighting) {
+                    return sighting.building && sighting.range > 0 &&
+                           JevAi_GetDistance(sighting.at, cell) <= sighting.range + 2;
+                })) {
+                continue;
+            }
+
+            if (std::any_of(m_posts.begin(), m_posts.end(),
+                            [&](const auto& item) {
+                                return item.first != unit->GetId() && JevAi_GetDistance(item.second, cell) < 2;
+                            }) ||
+                std::any_of(m_pickets.begin(), m_pickets.end(),
+                            [&](const auto& item) { return JevAi_GetDistance(item.second, cell) < 2; })) {
+                continue;
+            }
+
+            const int64_t score = static_cast<int64_t>(JevAi_GetDistance(anchor, cell)) * 1000 + GetReachCost(cell);
+
+            if (score < best) {
+                best = score;
+                post = cell;
+            }
+        }
+    }
+
+    return best != INT64_MAX;
+}
+
+int32_t JevAi::ScriptDefender(UnitInfo* unit) {
+    // -1: an enemy is near, Jev decides; 0: nothing to do now; 1: the controller moved the unit toward its post
+    const Point position(unit->grid_x, unit->grid_y);
+    int32_t nearest_enemy = -1;
+    const int32_t danger = GetDanger(unit, position, &nearest_enemy);
+
+    if (danger > 0 ||
+        (nearest_enemy >= 0 && nearest_enemy <= unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN))) {
+        return -1;
+    }
+
+    Point anchor;
+    Point origin;
+    bool enemy_known;
+
+    if (!GetThreatAnchor(anchor, origin, enemy_known)) {
+        return 0;
+    }
+
+    return ScriptToPost(unit, anchor, "the Defend group");
+}
+
+int32_t JevAi::ScriptToPost(UnitInfo* unit, Point anchor, const char* role) {
+    // 0: at its post or no post; 1: the controller moved the unit toward its post
+    const Point position(unit->grid_x, unit->grid_y);
+
+    ComputeReach(unit);
+
+    auto item = std::find_if(m_posts.begin(), m_posts.end(),
+                             [unit](const auto& entry) { return entry.first == unit->GetId(); });
+    Point post;
+
+    // a post stays while the axis stays and the unit can still get there
+    if (item != m_posts.end() && JevAi_GetDistance(item->second, anchor) <= 5 &&
+        (item->second == position || GetReachCost(item->second) >= 0)) {
+        post = item->second;
+
+    } else if (FindPost(unit, anchor, post)) {
+        if (item != m_posts.end()) {
+            item->second = post;
+
+        } else {
+            m_posts.push_back({unit->GetId(), post});
+        }
+
+    } else {
+        return 0;
+    }
+
+    if (JevAi_GetDistance(position, post) <= 1) {
+        if (unit->GetOrder() == ORDER_AWAIT) {
+            UnitsManager_SetNewOrder(unit, ORDER_SENTRY, ORDER_STATE_EXECUTING_ORDER);
+        }
+
+        return 0;
+    }
+
+    if (unit->speed == 0) {
+        return 0;
+    }
+
+    SDL_Log("Jev %s: %s of %s goes to its post at %s.", GetTeamName(), JevAi_GetUnitName(unit).c_str(), role,
+            JevAi_FormatPoint(post).c_str());
+
+    m_unit = unit;
+    m_scripted = true;
+    m_last_action = Action::MOVE;
+    m_move_start = position;
+    unit->move_to_grid_x = post.x;
+    unit->move_to_grid_y = post.y;
+
+    UnitsManager_SetNewOrder(unit, ORDER_MOVE, ORDER_STATE_INIT);
+
+    ++m_turn_moves;
+    m_wait_start = SDL_GetTicks();
+    m_state = State::WAIT_FOR_UNIT;
+
+    return 1;
+}
+
+int32_t JevAi::ScriptScanner(UnitInfo* unit) {
+    // Scanners watch the base from its edge on sentry: the first toward the way enemies come, more on the other sides
+    // (the user: more than one is only useful spread around the base; Radar does this once it can be spared)
+    const Point position(unit->grid_x, unit->grid_y);
+    int32_t nearest_enemy = -1;
+
+    if (GetDanger(unit, position, &nearest_enemy) > 0) {
+        return -1;
+    }
+
+    Point center;
+    int32_t extent;
+    Point origin;
+
+    if (!GetBaseCenter(center, extent)) {
+        return 0;
+    }
+
+    GetEnemyDirection(origin);
+
+    int32_t index = 0;
+
+    for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
+         it != it_end; ++it) {
+        index += (*it).team == m_team && (*it).hits > 0 && (*it).GetUnitType() == SCANNER &&
+                 (*it).GetId() < unit->GetId();
+    }
+
+    // the direction to the enemy, turned by a quarter for each further Scanner
+    Point toward(origin.x - center.x, origin.y - center.y);
+
+    for (int32_t turn = 0; turn < index % 4; ++turn) {
+        toward = Point(-toward.y, toward.x);
+    }
+
+    const int32_t length = std::max(1, std::max(std::abs(toward.x), std::abs(toward.y)));
+    const int32_t out = extent + 1;
+    const Point anchor(center.x + toward.x * out / length, center.y + toward.y * out / length);
+
+    return ScriptToPost(unit, anchor, "the base watch");
+}
+
+int32_t JevAi::ScriptScout(UnitInfo* unit) {
+    // Scouts search for the enemy base, then watch the way in, as Jev chose them before; Jev is asked on contact
+    const Point position(unit->grid_x, unit->grid_y);
+    int32_t nearest_enemy = -1;
+
+    if (GetDanger(unit, position, &nearest_enemy) > 0 ||
+        (nearest_enemy >= 0 && nearest_enemy <= unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN))) {
+        return -1;
+    }
+
+    ComputeReach(unit);
+    m_options.clear();
+    AddScoutOptions(unit);
+
+    if (m_options.empty()) {
+        return 0;
+    }
+
+    const Option option = m_options.front();
+    const bool picket = option.data.value("action", "") == "picket";
+
+    m_options.clear();
+
+    if (JevAi_GetDistance(position, option.destination) <= 1 || GetReachCost(option.destination) < 0 ||
+        unit->speed == 0) {
+        return 0;
+    }
+
+    if (picket) {
+        const uint32_t id = unit->GetId();
+
+        m_pickets.erase(std::remove_if(m_pickets.begin(), m_pickets.end(),
+                                       [id](const auto& item) { return item.first == id; }),
+                        m_pickets.end());
+        m_pickets.push_back({id, option.destination});
+    }
+
+    SDL_Log("Jev %s: Scout at %s %s %s.", GetTeamName(), JevAi_FormatPoint(position).c_str(),
+            picket ? "goes to its picket post at" : "searches for the enemy base toward",
+            JevAi_FormatPoint(option.destination).c_str());
+
+    m_unit = unit;
+    m_scripted = true;
+    m_last_action = Action::MOVE;
+    m_move_start = position;
+    unit->move_to_grid_x = option.destination.x;
+    unit->move_to_grid_y = option.destination.y;
+
+    UnitsManager_SetNewOrder(unit, ORDER_MOVE, ORDER_STATE_INIT);
+
+    ++m_turn_moves;
+    m_wait_start = SDL_GetTicks();
+    m_state = State::WAIT_FOR_UNIT;
+
+    return 1;
+}
+
+bool JevAi::IsInterceptor(UnitInfo* unit) const {
+    return std::find(m_interceptors.begin(), m_interceptors.end(), unit->GetId()) != m_interceptors.end();
+}
+
+void JevAi::AssignInterceptors() {
+    // lost Scouts leave; once enemy units are seen, Scouts beyond the Scout group join, the nearest to the base first
+    std::vector<UnitInfo*> scouts;
+
+    for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
+         it != it_end; ++it) {
+        if ((*it).team == m_team && (*it).hits > 0 && (*it).GetUnitType() == SCOUT) {
+            scouts.push_back(it->Get());
+        }
+    }
+
+    m_interceptors.erase(std::remove_if(m_interceptors.begin(), m_interceptors.end(),
+                                        [&scouts](uint32_t id) {
+                                            return std::none_of(scouts.begin(), scouts.end(), [id](UnitInfo* scout) {
+                                                return scout->GetId() == id;
+                                            });
+                                        }),
+                         m_interceptors.end());
+
+    Point center;
+    int32_t extent;
+
+    if (!m_enemy_seen || !GetBaseCenter(center, extent)) {
+        return;
+    }
+
+    std::sort(scouts.begin(), scouts.end(), [center](UnitInfo* a, UnitInfo* b) {
+        return JevAi_GetDistance(center, Point(a->grid_x, a->grid_y)) <
+               JevAi_GetDistance(center, Point(b->grid_x, b->grid_y));
+    });
+
+    for (UnitInfo* scout : scouts) {
+        const int32_t interceptors = static_cast<int32_t>(m_interceptors.size());
+
+        if (interceptors >= JevAi_Interceptors ||
+            static_cast<int32_t>(scouts.size()) - interceptors <= m_scout_size) {
+            break;
+        }
+
+        if (IsInterceptor(scout)) {
+            continue;
+        }
+
+        const uint32_t id = scout->GetId();
+
+        m_interceptors.push_back(id);
+        m_pickets.erase(std::remove_if(m_pickets.begin(), m_pickets.end(),
+                                       [id](const auto& item) { return item.first == id; }),
+                        m_pickets.end());
+
+        SDL_Log("Jev %s: %s joins the Defend group as an interceptor.", GetTeamName(), JevAi_GetUnitName(scout).c_str());
+    }
+}
+
+bool JevAi::FindRaider(UnitInfo* unit, Point& at) const {
+    // the nearest enemy unit seen this turn or the last one near the base or near a builder
+    Point center;
+    int32_t extent;
+
+    if (!GetBaseCenter(center, extent)) {
+        return false;
+    }
+
+    const Point position(unit->grid_x, unit->grid_y);
+    int32_t best = -1;
+
+    for (const Sighting& sighting : m_sightings) {
+        if (sighting.building || GameManager_TurnCounter - sighting.turn > 1) {
+            continue;
+        }
+
+        const int32_t to_builder = GetDistanceToOwnBuilder(sighting.at);
+
+        if (JevAi_GetDistance(center, sighting.at) > extent + 12 && (to_builder < 0 || to_builder > 6)) {
+            continue;
+        }
+
+        const int32_t distance = JevAi_GetDistance(position, sighting.at);
+
+        if (best < 0 || distance < best) {
+            best = distance;
+            at = sighting.at;
+        }
+    }
+
+    return best >= 0;
+}
+
+int32_t JevAi::ScriptInterceptor(UnitInfo* unit) {
+    // -1: an enemy is in sight, Jev decides (attack, charge, hold); 0: at its post; 1: the controller moved it
+    const Point position(unit->grid_x, unit->grid_y);
+    int32_t nearest_enemy = -1;
+
+    if (GetDanger(unit, position, &nearest_enemy) > 0 ||
+        (nearest_enemy >= 0 && nearest_enemy <= unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN))) {
+        return -1;
+    }
+
+    Point raider;
+
+    if (FindRaider(unit, raider) && unit->speed > 0) {
+        Point cell;
+
+        ComputeReach(unit);
+
+        if (FindPost(unit, raider, cell) && JevAi_GetDistance(position, cell) > 1) {
+            SDL_Log("Jev %s: %s of the Defend group chases the enemy seen at %s.", GetTeamName(),
+                    JevAi_GetUnitName(unit).c_str(), JevAi_FormatPoint(raider).c_str());
+
+            m_unit = unit;
+            m_scripted = true;
+            m_last_action = Action::MOVE;
+            m_move_start = position;
+            unit->move_to_grid_x = cell.x;
+            unit->move_to_grid_y = cell.y;
+
+            UnitsManager_SetNewOrder(unit, ORDER_MOVE, ORDER_STATE_INIT);
+
+            ++m_turn_moves;
+            m_wait_start = SDL_GetTicks();
+            m_state = State::WAIT_FOR_UNIT;
+
+            return 1;
+        }
+    }
+
+    Point center;
+    int32_t extent;
+
+    if (!GetBaseCenter(center, extent)) {
+        return 0;
+    }
+
+    // between raids the interceptors wait in the base, where they reach every side
+    return ScriptToPost(unit, center, "the Defend group's interceptors");
+}
+
+int32_t JevAi::CountAntiAirTurrets() const {
+    // standing, being built and walked to
+    int32_t count = 0;
+
+    for (auto it = UnitsManager_StationaryUnits.Begin(), it_end = UnitsManager_StationaryUnits.End(); it != it_end;
+         ++it) {
+        count += (*it).team == m_team && (*it).hits > 0 && (*it).GetUnitType() == ANTIAIR;
+    }
+
+    for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
+         it != it_end; ++it) {
+        // a builder leaving a finished building still has the build order, with an empty build list (m-aa2 crash)
+        count += (*it).team == m_team && (*it).hits > 0 && JevAi_IsBuilder((*it).GetUnitType()) &&
+                 (*it).GetOrder() == ORDER_BUILD && (*it).GetBuildList().GetCount() > 0 &&
+                 (*it).GetConstructedUnitType() == ANTIAIR;
+    }
+
+    for (const Site& site : m_sites) {
+        count += site.unit_type == ANTIAIR;
+    }
+
+    return count;
+}
+
+void JevAi::ApplyScripted(const Option& option, const char* reason) {
+    // the controller's own choice among the options, applied as an answer would be; no question is sent
+    SDL_Log("Jev %s: %s, no question: %s.", GetTeamName(), reason, option.facts.c_str());
+
+    Apply(json{{"id", m_request_id}, {"choice", option.key}, {"model", "script"}, {"confidence", 1.0}}.dump());
+}
+
+void JevAi::UnitSpotted(UnitInfo* unit) {
+    // aircraft strike during the enemy's turn and are often gone by Jev's own: any sighting counts
+    if (unit->team != m_team && unit->team != PLAYER_TEAM_ALIEN && (unit->flags & MOBILE_AIR_UNIT) &&
+        !m_enemy_air_seen) {
+        m_enemy_air_seen = true;
+
+        SDL_Log("Jev %s: enemy aircraft seen, %s at %s: air defense comes first now.", GetTeamName(),
+                JevAi_GetUnitName(unit).c_str(), JevAi_FormatPoint(Point(unit->grid_x, unit->grid_y)).c_str());
+    }
+}
+
+JevAi::Fight JevAi::EstimateFight(UnitInfo* unit, UnitInfo* target, Point end, int32_t turns_to_range,
+                                  double unseen) const {
+    // a short simulation of the local fight after a charge to `end`: the unit, the team's armed units and defenses
+    // that can fire at the target this turn or next, against the target and the known enemies that can fire at
+    // `end` (its cover). Every unit fires its rounds each turn, one shot at a time, attack minus armor per shot (at
+    // least 1), at the side's focus (the target, or the charging unit) while it stands, else at the weakest enemy it
+    // can hit. While the unit closes in, the cover fires first. Ground not in sight makes the enemy's fire count more.
+    struct Fighter {
+        UnitInfo* unit;
+        Point at;
+        int32_t hits;
+        int32_t attack;
+        int32_t armor;
+        int32_t rounds;
+        int32_t value;
+    };
+
+    auto make = [](UnitInfo* item, Point at) {
+        UnitValues* values = item->GetBaseValues();
+
+        return Fighter{item,
+                       at,
+                       static_cast<int32_t>(item->hits),
+                       values->GetAttribute(ATTRIB_ATTACK),
+                       values->GetAttribute(ATTRIB_ARMOR),
+                       std::max(1, values->GetAttribute(ATTRIB_ROUNDS)),
+                       static_cast<int32_t>(item->GetNormalRateBuildCost())};
+    };
+
+    std::vector<Fighter> ours{make(unit, end)};
+    std::vector<Fighter> theirs{make(target, Point(target->grid_x, target->grid_y))};
+    const Point target_at(target->grid_x, target->grid_y);
+
+    for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_StationaryUnits}) {
+        for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
+            UnitInfo& other = *it;
+            UnitValues* values = other.GetBaseValues();
+            const Point at(other.grid_x, other.grid_y);
+            const int32_t speed = (other.flags & STATIONARY) ? 0 : values->GetAttribute(ATTRIB_SPEED);
+
+            if (&other == unit || &other == target || other.hits == 0 || values->GetAttribute(ATTRIB_ATTACK) == 0 ||
+                other.ammo == 0) {
+                continue;
+            }
+
+            if (other.team == m_team) {
+                if (Access_IsValidAttackTargetType(other.GetUnitType(), target->GetUnitType()) &&
+                    JevAi_GetDistance(at, target_at) <= values->GetAttribute(ATTRIB_RANGE) + speed) {
+                    ours.push_back(make(&other, at));
+                }
+
+            } else if (other.team != PLAYER_TEAM_ALIEN && other.IsVisibleToTeam(m_team) &&
+                       Access_IsValidAttackTargetType(other.GetUnitType(), unit->GetUnitType()) &&
+                       JevAi_GetDistance(at, end) <= values->GetAttribute(ATTRIB_RANGE) + speed) {
+                theirs.push_back(make(&other, at));
+            }
+        }
+    }
+
+    // one side's volley: each fighter fires its rounds at the focus, else at the weakest it can hit
+    auto volley = [](std::vector<Fighter>& shooters, std::vector<Fighter>& targets, double scale) {
+        for (const Fighter& shooter : shooters) {
+            if (shooter.hits <= 0) {
+                continue;
+            }
+
+            for (int32_t shot = 0; shot < shooter.rounds; ++shot) {
+                Fighter* aim = nullptr;
+
+                for (Fighter& candidate : targets) {
+                    if (candidate.hits <= 0 ||
+                        !Access_IsValidAttackTargetType(shooter.unit->GetUnitType(), candidate.unit->GetUnitType())) {
+                        continue;
+                    }
+
+                    if (&candidate == &targets.front()) {
+                        aim = &candidate;
+                        break;
+                    }
+
+                    if (!aim || candidate.hits < aim->hits) {
+                        aim = &candidate;
+                    }
+                }
+
+                if (!aim) {
+                    break;
+                }
+
+                aim->hits -= static_cast<int32_t>(std::max(1, shooter.attack - aim->armor) * scale + 0.5);
+            }
+        }
+    };
+
+    auto standing = [](const std::vector<Fighter>& side) {
+        return std::any_of(side.begin(), side.end(), [](const Fighter& item) { return item.hits > 0; });
+    };
+
+    const double enemy_scale = 1.0 + unseen;
+    int32_t turn = 0;
+
+    for (int32_t step = 0; step < turns_to_range && standing(ours); ++step) {
+        // the cover fires at the unit closing in
+        volley(theirs, ours, enemy_scale);
+    }
+
+    for (turn = 0; turn < 3 && standing(ours) && theirs.front().hits > 0; ++turn) {
+        volley(ours, theirs, 1.0);
+
+        if (standing(theirs)) {
+            volley(theirs, ours, enemy_scale);
+        }
+    }
+
+    Fight fight{};
+
+    fight.turns = turn + turns_to_range;
+    fight.allies = static_cast<int32_t>(ours.size()) - 1;
+    fight.enemies = static_cast<int32_t>(theirs.size()) - 1;
+    fight.target_destroyed = theirs.front().hits <= 0;
+    fight.unit_destroyed = ours.front().hits <= 0;
+
+    for (const Fighter& item : theirs) {
+        fight.gain += item.hits <= 0 ? item.value : 0;
+    }
+
+    for (const Fighter& item : ours) {
+        fight.loss += item.hits <= 0 ? item.value : 0;
+    }
+
+    return fight;
+}
+
+void JevAi::AddChargeOptions(UnitInfo* unit) {
+    // close in on an enemy the unit cannot fire at this turn. A charge is a desperation move (the user, 2026-11-13:
+    // only when out of choices, with a long range enemy near the base; without vision the unit can be wiped out) or
+    // one the task group wins (the user: a Tank against an uncovered Scout, absolutely; against cover only if it
+    // looks like a win). Both into ground the team sees; a fight estimate (EstimateFight) says who wins.
+    UnitValues* values = unit->GetBaseValues();
+    const Point position(unit->grid_x, unit->grid_y);
+    const int32_t range = values->GetAttribute(ATTRIB_RANGE);
+    // distance, target, last resort
+    std::vector<std::tuple<int32_t, UnitInfo*, bool>> targets;
+    Point center;
+    int32_t extent;
+
+    if (values->GetAttribute(ATTRIB_ATTACK) == 0 || unit->ammo == 0 || unit->speed == 0 ||
+        !GetBaseCenter(center, extent)) {
+        return;
+    }
+
+    for (auto* list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_StationaryUnits}) {
+        for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
+            UnitInfo& target = *it;
+            UnitValues* target_values = target.GetBaseValues();
+
+            if (target.team == m_team || target.team == PLAYER_TEAM_ALIEN || target.hits == 0 ||
+                !target.IsVisibleToTeam(m_team) || target.GetUnitType() == CNCT_4W ||
+                target.GetUnitType() == ROAD || ((target.flags & STATIONARY) && target_values->GetAttribute(ATTRIB_ATTACK) == 0) ||
+                !Access_IsValidAttackTarget(unit, &target)) {
+                continue;
+            }
+
+            // already attackable this turn: the attack option covers it
+            if (std::any_of(m_options.begin(), m_options.end(),
+                            [&target](const Option& option) { return option.target == &target; })) {
+                continue;
+            }
+
+            const Point at(target.grid_x, target.grid_y);
+            const int32_t target_range = target_values->GetAttribute(ATTRIB_RANGE);
+            const int32_t distance = JevAi_GetDistance(position, at);
+
+            if (distance > range + unit->speed * 3) {
+                continue;
+            }
+
+            // a last resort: it outranges the unit and shells the base or is about to, and no other unit or defense
+            // of the team outranges or matches it within a turn's reach
+            bool last_resort = target_values->GetAttribute(ATTRIB_ATTACK) > 0 && target_range > range &&
+                               Access_IsValidAttackTargetType(target.GetUnitType(), unit->GetUnitType()) &&
+                               JevAi_GetDistance(center, at) <= extent + target_range + 2;
+
+            for (auto* own_list : {&UnitsManager_MobileLandSeaUnits, &UnitsManager_StationaryUnits}) {
+                for (auto own = own_list->Begin(), own_end = own_list->End(); own != own_end && last_resort; ++own) {
+                    UnitValues* own_values = (*own).GetBaseValues();
+
+                    last_resort =
+                        !((*own).team == m_team && own->Get() != unit && (*own).hits > 0 && (*own).ammo > 0 &&
+                          own_values->GetAttribute(ATTRIB_ATTACK) > 0 &&
+                          own_values->GetAttribute(ATTRIB_RANGE) >= target_range &&
+                          Access_IsValidAttackTargetType((*own).GetUnitType(), target.GetUnitType()) &&
+                          JevAi_GetDistance(Point((*own).grid_x, (*own).grid_y), at) <=
+                              own_values->GetAttribute(ATTRIB_RANGE) + own_values->GetAttribute(ATTRIB_SPEED));
+                }
+            }
+
+            targets.push_back({distance, &target, last_resort});
+        }
+    }
+
+    std::sort(targets.begin(), targets.end(),
+              [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
+
+    int32_t offered = 0;
+
+    for (size_t i = 0; i < targets.size() && offered < 2; ++i) {
+        UnitInfo* target = std::get<1>(targets[i]);
+        const bool last_resort = std::get<2>(targets[i]);
+        const Point at(target->grid_x, target->grid_y);
+        Point best;
+        int32_t best_distance = INT32_MAX;
+
+        for (int32_t x = position.x - unit->speed; x <= position.x + unit->speed; ++x) {
+            for (int32_t y = position.y - unit->speed; y <= position.y + unit->speed; ++y) {
+                const Point cell(x, y);
+                const int32_t cost = GetReachCost(cell);
+
+                if (cost <= 0 || cost > unit->speed || IsFactoryExit(cell) ||
+                    !Access_IsAccessible(unit->GetUnitType(), m_team, x, y, AccessModifier_SameClassBlocks)) {
+                    continue;
+                }
+
+                const int32_t distance = Access_GetSquaredDistance(cell, at);
+
+                if (distance < best_distance) {
+                    best = cell;
+                    best_distance = distance;
+                }
+            }
+        }
+
+        if (best_distance == INT32_MAX || JevAi_GetDistance(best, at) >= JevAi_GetDistance(position, at)) {
+            continue;
+        }
+
+        const int32_t left = std::max(0, JevAi_GetDistance(best, at) - range);
+        const int32_t turns =
+            left == 0 ? 0 : (left + values->GetAttribute(ATTRIB_SPEED) - 1) / std::max(1, values->GetAttribute(ATTRIB_SPEED));
+
+        if (turns > (last_resort ? 2 : 1)) {
+            continue;
+        }
+
+        // the ground around the end of the charge, as far as the target fires and at least 4 cells, must be mostly
+        // in sight: enemies unseen there could wipe the unit out
+        const int32_t radius = std::max(4, target->GetBaseValues()->GetAttribute(ATTRIB_RANGE));
+        const HeatMap* vision = UnitsManager_TeamInfo[m_team].heat_map.get();
+        int32_t cells = 0;
+        int32_t seen = 0;
+
+        for (int32_t x = best.x - radius; x <= best.x + radius && vision; ++x) {
+            for (int32_t y = best.y - radius; y <= best.y + radius; ++y) {
+                if (JevAi_IsInsideMap(Point(x, y)) && JevAi_GetDistance(best, Point(x, y)) <= radius) {
+                    ++cells;
+                    seen += vision->GetComplete(x, y) > 0;
+                }
+            }
+        }
+
+        if (!vision || cells == 0 || seen * 5 < cells * 4) {
+            continue;
+        }
+
+        const double unseen = 1.0 - static_cast<double>(seen) / cells;
+        const Fight fight = EstimateFight(unit, target, best, turns, unseen);
+        const bool wins = fight.target_destroyed && !fight.unit_destroyed && fight.gain > fight.loss;
+
+        if (!wins && !last_resort) {
+            continue;
+        }
+
+        const int32_t closer = JevAi_GetDistance(position, at) - JevAi_GetDistance(best, at);
+        const std::string target_name = JevAi_GetUnitName(target);
+        // the mock's score: a win without losses and without cover first
+        const int32_t score = wins ? 40 + std::min(40, (fight.gain - fight.loss) / 2) - fight.enemies * 5 : 0;
+        std::string facts = "charge the enemy " + target_name + " at " + JevAi_FormatPoint(at) + ", it has " +
+                            std::to_string(target->hits) + " hits: move " + std::to_string(closer) +
+                            " cells toward it to " + JevAi_FormatPoint(best) + ", " +
+                            (turns == 0 ? std::string("in range to fire")
+                                        : "in range in " + std::to_string(turns) + (turns == 1 ? " more turn" : " more turns")) +
+                            "; fight estimate over " + std::to_string(fight.turns) + (fight.turns == 1 ? " turn with " : " turns with ") +
+                            std::to_string(fight.allies) + " more of your units against it and " +
+                            std::to_string(fight.enemies) + " enemies covering it: " +
+                            (fight.target_destroyed ? "it is destroyed" : "it survives") + ", you destroy " +
+                            std::to_string(fight.gain) + " and lose " + std::to_string(fight.loss) +
+                            " in materials" + (fight.unit_destroyed ? ", this unit is destroyed" : "");
+
+        if (last_resort && !wins) {
+            facts += "; a last resort: it outranges you near your base and nothing else of yours can answer it";
+        }
+
+        m_options.push_back({"c" + std::to_string(m_options.size()),
+                             Action::MOVE,
+                             best,
+                             INVALID_ID,
+                             nullptr,
+                             facts,
+                             score,
+                             {{"action", "charge"},
+                              {"target", target_name},
+                              {"at", JevAi_PointData(at)},
+                              {"hits", target->hits},
+                              {"closer", closer},
+                              {"to", JevAi_PointData(best)},
+                              {"turns_to_range", turns},
+                              {"fight", {{"turns", fight.turns},
+                                         {"allies", fight.allies},
+                                         {"cover", fight.enemies},
+                                         {"target_destroyed", fight.target_destroyed},
+                                         {"gain", fight.gain},
+                                         {"loss", fight.loss},
+                                         {"unit_destroyed", fight.unit_destroyed}}},
+                              {"reason", wins ? "winnable" : "last_resort"}}});
+        ++offered;
+    }
+}
+
+void JevAi::AddHoldOption(UnitInfo* unit) {
+    // a Defend group member in contact can go back to its post instead of chasing
+    auto item = std::find_if(m_posts.begin(), m_posts.end(),
+                             [unit](const auto& entry) { return entry.first == unit->GetId(); });
+
+    if (item == m_posts.end() || JevAi_GetDistance(Point(unit->grid_x, unit->grid_y), item->second) <= 1 ||
+        GetReachCost(item->second) < 0) {
+        return;
+    }
+
+    const int32_t distance = JevAi_GetDistance(Point(unit->grid_x, unit->grid_y), item->second);
+
+    m_options.push_back({"h" + std::to_string(m_options.size()),
+                         Action::MOVE,
+                         item->second,
+                         INVALID_ID,
+                         nullptr,
+                         "hold: go back to your post in the Defend group at " + JevAi_FormatPoint(item->second) + ", " +
+                             std::to_string(distance) + " cells away, and wait there on sentry; it fires at enemies "
+                             "that come in range",
+                         5,
+                         {{"action", "hold"}, {"to", JevAi_PointData(item->second)}, {"distance", distance}}});
+}
+
+void JevAi::CheckCommandTriggers() {
+    // the commander is asked when the situation changes, not every turn
+    const int32_t turn = GameManager_TurnCounter;
+    const int32_t defenders = CountDefenders();
+    Cargo stock;
+    Cargo capacity;
+
+    if (Complex* complex = GetEconomyComplex()) {
+        complex->GetCargoInfo(stock, capacity);
+    }
+
+    std::string trigger;
+
+    if (m_last_command_turn < 0) {
+        trigger = turn >= 2 ? "start of the game" : "";
+
+    } else if (m_enemy_seen && !m_command_enemy_seen) {
+        trigger = "first enemy units seen";
+
+    } else if (m_enemy_base_seen && !m_command_enemy_base_seen) {
+        trigger = "enemy base found";
+
+    } else if (m_enemy_air_seen && !m_command_enemy_air_seen) {
+        trigger = "enemy aircraft seen";
+
+    } else if (m_defenders_at_command >= 2 && defenders * 2 <= m_defenders_at_command) {
+        trigger = "the Defend group lost half of its units";
+
+    } else if (defenders >= m_defend_size && capacity.raw > 0 && stock.raw * 5 >= capacity.raw * 4 &&
+               turn - m_last_command_turn >= 3) {
+        trigger = "the Defend group is full and raw materials pile up in the base";
+    }
+
+    if (!trigger.empty()) {
+        m_command_trigger = trigger;
+    }
+}
+
+nlohmann::ordered_json JevAi::GetCommandState() const {
+    json state;
+    Cargo stock;
+    Cargo capacity;
+    Cargo mining;
+    Cargo mining_capacity;
+    int32_t anti_air = 0;
+    const int32_t defenders = CountDefenders(&anti_air);
+    Point anchor;
+    Point origin;
+    bool enemy_known = false;
+    uint32_t best_enemy_points = 0;
+
+    if (Complex* complex = GetEconomyComplex()) {
+        complex->GetCargoInfo(stock, capacity);
+        complex->GetCargoMining(mining, mining_capacity);
+    }
+
+    for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
+        if (team != m_team && UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE) {
+            best_enemy_points = std::max(best_enemy_points, UnitsManager_TeamInfo[team].team_points);
+        }
+    }
+
+    GetThreatAnchor(anchor, origin, enemy_known);
+
+    int32_t enemy_buildings = 0;
+    int32_t recent_near_base = 0;
+    Point center;
+    int32_t extent = 0;
+    const bool has_center = GetBaseCenter(center, extent);
+
+    for (const auto& sighting : m_sightings) {
+        enemy_buildings += sighting.building;
+        recent_near_base += !sighting.building && GameManager_TurnCounter - sighting.turn <= 5 && has_center &&
+                            JevAi_GetDistance(center, sighting.at) <= extent + 15;
+    }
+
+    state["game"] = "M.A.X., turn-based strategy";
+    state["turn"] = GameManager_TurnCounter;
+    state["why_asked"] = m_command_trigger;
+
+    if (m_last_command_turn >= 0) {
+        state["current_plan"] = {{"defend_group_size", m_defend_size},
+                                 {"scout_group_size", m_scout_size},
+                                 {"set_on_turn", m_last_command_turn},
+                                 {"set_because", m_last_command_reason}};
+    }
+    state["score"] = {{"your_points", UnitsManager_TeamInfo[m_team].team_points},
+                      {"best_enemy_points", best_enemy_points}};
+
+    if (JevAi_GetTurnsLeft() >= 0) {
+        state["score"]["turns_left"] = JevAi_GetTurnsLeft();
+    }
+
+    state["economy"] = {{"raw", stock.raw},
+                        {"raw_capacity", capacity.raw},
+                        {"raw_mined_per_turn", mining.raw},
+                        {"eco_spheres", CountOwnUnits(GREENHSE)},
+                        {"factories", CountOwnUnits(LANDPLT) + CountOwnUnits(LIGHTPLT)}};
+    state["groups"] = {
+        {"defend",
+         {{"size", m_defend_size},
+          {"combat_units", defenders - anti_air},
+          {"anti_air_units", anti_air},
+          {"combat_units_in_production", CountInProduction(true, false, false)},
+          {"posts_toward", JevAi_PointData(origin)},
+          {"enemy_direction_known", enemy_known}}},
+        {"scouts", {{"size", m_scout_size}, {"units", CountOwnUnits(SCOUT)}}}};
+    int32_t threat = 0;
+    int32_t threat_outranging = 0;
+
+    for (const auto& item : m_threats) {
+        if (GameManager_TurnCounter - item.turn <= 5) {
+            threat = std::max(threat, item.near_base);
+            threat_outranging = std::max(threat_outranging, item.outranging);
+        }
+    }
+
+    int32_t enemy_base_distance = -1;
+
+    for (const auto& sighting : m_sightings) {
+        if (sighting.building && has_center) {
+            const int32_t distance = JevAi_GetDistance(center, sighting.at);
+
+            enemy_base_distance = enemy_base_distance < 0 ? distance : std::min(enemy_base_distance, distance);
+        }
+    }
+
+    int32_t army_outranging = 0;
+
+    for (const auto& item : m_enemy_army) {
+        army_outranging += item.second.second;
+    }
+
+    state["enemy"] = {{"units_seen", m_enemy_seen},
+                      {"combat_units_seen_last_15_turns", static_cast<int32_t>(m_enemy_army.size())},
+                      {"of_them_outranging_your_tanks_all", army_outranging},
+                      {"combat_units_near_base_last_5_turns", threat},
+                      {"of_them_outranging_your_tanks", threat_outranging},
+                      {"base_found", m_enemy_base_seen},
+                      {"buildings_known", enemy_buildings},
+                      {"aircraft_seen", m_enemy_air_seen},
+                      {"unit_sightings_near_base_last_5_turns", recent_near_base}};
+
+    if (enemy_base_distance >= 0) {
+        state["enemy"]["nearest_enemy_building_distance"] = enemy_base_distance;
+    }
+    state["units_lost"] = m_units_lost;
+
+    return state;
+}
+
+bool JevAi::AskCommand() {
+    const int32_t defenders = CountDefenders();
+
+    m_options.clear();
+
+    // once enemy units are seen the Defend group keeps at least 4 (j6 world 9: shrunk to 2 on turn 50 while the enemy
+    // grew from 12 to 38 units; the user, 2026-11-13: defend as soon as enemy units are spotted, not once their base is)
+    const int32_t minimum = m_enemy_seen ? 4 : 2;
+
+    if (m_defend_size < minimum) {
+        m_defend_size = minimum;
+    }
+
+    for (const int32_t size : {2, 4, 6, 8, 10, 12}) {
+        if (size == m_defend_size || size < minimum || std::abs(size - m_defend_size) > 4) {
+            continue;
+        }
+
+        m_options.push_back({"d" + std::to_string(m_options.size()),
+                             Action::COMMAND,
+                             Point(),
+                             INVALID_ID,
+                             nullptr,
+                             "Defend group of " + std::to_string(size) + " combat units instead of " +
+                                 std::to_string(m_defend_size) + " (it has " + std::to_string(defenders) +
+                                 "): factories produce combat units until it is full",
+                             size == 6 ? 20 : 0,
+                             {{"action", "set_defend"}, {"size", size}, {"was", m_defend_size}, {"has", defenders}}});
+    }
+
+    for (const int32_t size : {0, 1, 2}) {
+        if (size == m_scout_size) {
+            continue;
+        }
+
+        m_options.push_back({"s" + std::to_string(m_options.size()),
+                             Action::COMMAND,
+                             Point(),
+                             INVALID_ID,
+                             nullptr,
+                             "Scout group of " + std::to_string(size) + " instead of " + std::to_string(m_scout_size) +
+                                 ": Scouts search for the enemy base and watch the way in",
+                             0,
+                             {{"action", "set_scouts"}, {"size", size}, {"was", m_scout_size}}});
+    }
+
+    m_options.push_back({"keep",
+                         Action::COMMAND,
+                         Point(),
+                         INVALID_ID,
+                         nullptr,
+                         "keep the plan: Defend group of " + std::to_string(m_defend_size) + ", Scout group of " +
+                             std::to_string(m_scout_size),
+                         10,
+                         {{"action", "keep_plan"}, {"defend", m_defend_size}, {"scouts", m_scout_size}}});
+
+    json criteria;
+    json scores;
+    json options = json::object();
+
+    for (const auto& option : m_options) {
+        criteria[option.key] = option.facts;
+        scores[option.key] = option.score;
+        options[option.key] = option.data;
+    }
+
+    json request;
+
+    request["id"] = ++m_request_id;
+    request["team"] = GetTeamName();
+    request["state"] = GetCommandState();
+    request["questions"] = {
+        {"command", {{"type", "choice"}, {"instructions", JevAi_CommandInstructions}, {"criteria", criteria}}}};
+    request["mock_scores"] = scores;
+    request["options"] = options;
+
+    m_question = "command";
+    m_last_command_turn = GameManager_TurnCounter;
+    m_last_command_reason = m_command_trigger;
+    m_command_enemy_seen = m_enemy_seen;
+    m_command_enemy_base_seen = m_enemy_base_seen;
+    m_command_enemy_air_seen = m_enemy_air_seen;
+    m_defenders_at_command = defenders;
+    m_command_trigger.clear();
+    ++m_turn_questions;
+
+    return m_bridge.Send(request.dump());
+}
+
+void JevAi::ApplyCommand(const Option& option) {
+    const std::string action = option.data.value("action", "");
+
+    if (action == "set_defend") {
+        m_defend_size = option.data.value("size", m_defend_size);
+
+    } else if (action == "set_scouts") {
+        m_scout_size = option.data.value("size", m_scout_size);
+    }
+
+    SDL_Log("Jev %s: commander plan: Defend group %d, Scout group %d.", GetTeamName(), m_defend_size, m_scout_size);
+}
+
 void JevAi::AddSurveyOptions(UnitInfo* surveyor) {
     // new mines can only be joined to the base close to it: survey that ground, nearest first, as a human player
     // sends a Surveyor to survey an area
@@ -2313,7 +3692,8 @@ void JevAi::AddSurveyOptions(UnitInfo* surveyor) {
             const int32_t distance = JevAi_GetDistance(position, Point(x, y));
 
             if (distance < best_distance &&
-                Access_IsAccessible(SURVEYOR, m_team, x, y, AccessModifier_SameClassBlocks)) {
+                Access_IsAccessible(SURVEYOR, m_team, x, y, AccessModifier_SameClassBlocks) &&
+                GetReachCost(Point(x, y)) >= 0) {
                 best = Point(x, y);
                 best_distance = distance;
             }
@@ -2432,8 +3812,9 @@ void JevAi::AddRefillOptions(UnitInfo* builder) {
                 const Point cell(x, y);
 
                 if (JevAi_IsInsideMap(cell) &&
-                    Access_IsAccessible(builder->GetUnitType(), m_team, x, y, AccessModifier_SameClassBlocks)) {
-                    const int32_t distance = Access_GetSquaredDistance(cell, Point(builder->grid_x, builder->grid_y));
+                    Access_IsAccessible(builder->GetUnitType(), m_team, x, y, AccessModifier_SameClassBlocks) &&
+                    GetReachCost(cell) >= 0) {
+                    const int32_t distance = GetReachCost(cell);
 
                     if (distance < nearest_distance) {
                         nearest = &building;
@@ -2453,7 +3834,7 @@ void JevAi::AddRefillOptions(UnitInfo* builder) {
                              INVALID_ID,
                              nullptr,
                              "go next to the " + JevAi_GetUnitName(nearest) + " at " + JevAi_FormatPoint(nearest_cell) +
-                                 ", " + std::to_string(static_cast<int32_t>(SDL_sqrt(nearest_distance))) +
+                                 ", " + std::to_string(static_cast<int32_t>(SDL_sqrt(Access_GetSquaredDistance(nearest_cell, Point(builder->grid_x, builder->grid_y))))) +
                                  " cells away, to take raw materials there; you carry " +
                                  std::to_string(builder->storage) + " of " + std::to_string(capacity) +
                                  ", the base stores " + std::to_string(nearest_materials.raw),
@@ -2461,7 +3842,7 @@ void JevAi::AddRefillOptions(UnitInfo* builder) {
                              {{"action", "go_refill"},
                               {"to_building", JevAi_GetUnitName(nearest)},
                               {"to", JevAi_PointData(nearest_cell)},
-                              {"distance", static_cast<int32_t>(SDL_sqrt(nearest_distance))},
+                              {"distance", static_cast<int32_t>(SDL_sqrt(Access_GetSquaredDistance(nearest_cell, Point(builder->grid_x, builder->grid_y))))},
                               {"carried", builder->storage},
                               {"capacity", capacity},
                               {"base_raw", nearest_materials.raw}}});
@@ -2493,6 +3874,40 @@ void JevAi::AddAttackOptions(UnitInfo* unit) {
                 continue;
             }
 
+            // out of range: only when a firing cell is reachable this turn with a shot left, the cheapest one; moving
+            // costs shots to units that cannot move and fire (Paths_CalculateStep)
+            const int32_t range = values->GetAttribute(ATTRIB_RANGE);
+            int32_t moves_to_fire = 0;
+
+            if (distance > range * range) {
+                moves_to_fire = -1;
+
+                for (int32_t x = target.grid_x - range; x <= target.grid_x + range; ++x) {
+                    for (int32_t y = target.grid_y - range; y <= target.grid_y + range; ++y) {
+                        const int32_t cost = GetReachCost(Point(x, y));
+                        const int32_t dx = x - target.grid_x;
+                        const int32_t dy = y - target.grid_y;
+
+                        if (cost < 0 || cost > unit->speed || dx * dx + dy * dy > range * range ||
+                            (moves_to_fire >= 0 && cost >= moves_to_fire)) {
+                            continue;
+                        }
+
+                        if (!values->GetAttribute(ATTRIB_MOVE_AND_FIRE) &&
+                            std::min<int32_t>(unit->shots, values->GetAttribute(ATTRIB_ROUNDS) * (unit->speed - cost) /
+                                                               std::max(1, values->GetAttribute(ATTRIB_SPEED))) < 1) {
+                            continue;
+                        }
+
+                        moves_to_fire = cost;
+                    }
+                }
+
+                if (moves_to_fire < 0) {
+                    continue;
+                }
+            }
+
             UnitValues* target_values = target.GetBaseValues();
             const int32_t damage =
                 std::max(1, values->GetAttribute(ATTRIB_ATTACK) - target_values->GetAttribute(ATTRIB_ARMOR));
@@ -2505,13 +3920,24 @@ void JevAi::AddAttackOptions(UnitInfo* unit) {
                 " of " + std::to_string(target_values->GetAttribute(ATTRIB_HITS)) + " hits, each shot does about " +
                 std::to_string(damage) + " damage, you have " + std::to_string(unit->shots) + " shots this turn";
 
-            facts += in_range ? ", in range now" : ", you move closer first";
+            facts += in_range ? ", in range now" : ", you move " + std::to_string(moves_to_fire) + " cells closer first";
             facts += shoots_back ? ", it can shoot back with attack " +
                                        std::to_string(target_values->GetAttribute(ATTRIB_ATTACK))
                                  : ", it cannot shoot back";
 
             if (target.hits <= damage * unit->shots) {
                 facts += ", it can be destroyed this turn";
+            }
+
+            // counter-battery: long range units fire at the enemy's long range units first, which outrange the front
+            // line and shell it from where it cannot answer (j7-groups4: 96 of 226 enemy hits came from such units)
+            const bool counter_battery = JevAi_IsLongRange(m_team, unit->GetUnitType()) && shoots_back &&
+                                         target_values->GetAttribute(ATTRIB_RANGE) >
+                                             UnitsManager_GetCurrentUnitValues(&UnitsManager_TeamInfo[m_team], TANK)
+                                                 ->GetAttribute(ATTRIB_RANGE);
+
+            if (counter_battery) {
+                facts += ", counter-battery: it outranges your front line, your long range units silence it first";
             }
 
             json data = {{"action", "attack"},
@@ -2523,6 +3949,14 @@ void JevAi::AddAttackOptions(UnitInfo* unit) {
                          {"shots", unit->shots},
                          {"in_range", in_range},
                          {"destroyable", target.hits <= damage * unit->shots}};
+
+            if (counter_battery) {
+                data["counter_battery"] = true;
+            }
+
+            if (!in_range) {
+                data["moves_to_fire"] = moves_to_fire;
+            }
 
             if (shoots_back) {
                 data["shoots_back_attack"] = target_values->GetAttribute(ATTRIB_ATTACK);
@@ -2585,6 +4019,11 @@ json JevAi::GetState(UnitInfo* unit) const {
 
     if (!(unit->flags & STATIONARY)) {
         state["you"]["moves_left"] = unit->speed;
+
+        if (unit->GetBaseValues()->GetAttribute(ATTRIB_ATTACK) > 0) {
+            state["you"]["ammo"] = unit->ammo;
+            state["you"]["max_ammo"] = unit->GetBaseValues()->GetAttribute(ATTRIB_AMMO);
+        }
         state["you"]["danger_here"] = GetDanger(unit, position, &nearest_enemy);
 
         if (JevAi_IsBuilder(unit->GetUnitType())) {
@@ -2701,6 +4140,7 @@ json JevAi::GetState(UnitInfo* unit) const {
 
     state["buildings"] = buildings;
     state["units"] = units;
+
     state["explored_cells"] = m_explored_cells;
     state["map_cells"] = ResourceManager_MapSize.x * ResourceManager_MapSize.y;
     state["enemies_seen"] = enemies_seen;
@@ -2859,13 +4299,42 @@ void JevAi::Apply(const std::string& answer) {
         option = m_options.end() - 1;
     }
 
+    if (m_question == "command") {
+        SDL_Log("Jev %s: commander chose %s (%s), model %s, confidence %.2f.", GetTeamName(), option->key.c_str(),
+                option->facts.c_str(), model.c_str(), confidence);
+
+        ApplyCommand(*option);
+        m_state = State::SELECT;
+
+        return;
+    }
+
     SDL_Log("Jev %s: %s at %s chose %s (%s), model %s, confidence %.2f.", GetTeamName(),
             JevAi_GetUnitName(&*m_unit).c_str(), JevAi_FormatPoint(Point(m_unit->grid_x, m_unit->grid_y)).c_str(),
             option->key.c_str(), option->facts.c_str(), model.c_str(), confidence);
 
     m_last_action = option->action;
 
+    if (m_question == "production") {
+        if (option->action == Action::STAY) {
+            m_idle_factories[m_unit->GetId()] = m_factory_signature;
+
+        } else {
+            m_idle_factories.erase(m_unit->GetId());
+        }
+    }
+
+    if (m_question == "construction") {
+        if (option->action == Action::STAY) {
+            m_idle_builders[m_unit->GetId()] = m_builder_signature;
+
+        } else {
+            m_idle_builders.erase(m_unit->GetId());
+        }
+    }
+
     switch (option->action) {
+        case Action::COMMAND:
         case Action::STAY: {
             FinishUnit();
         } break;
@@ -2935,14 +4404,18 @@ void JevAi::Apply(const std::string& answer) {
         case Action::ATTACK: {
             m_move_start = Point(m_unit->grid_x, m_unit->grid_y);
 
-            // same order as the classic AiAttack_EvaluateAttack and the human attack click (GameManager_SetUnitOrder):
-            // the unit moves toward the target cell until it is in range, then fires
+            // a computer team's attack in the firing state is cancelled when the target is out of range: out of range,
+            // request the approach path first; it stops within weapon range and then fires as a classic attack does
             m_unit->SetEnemy(&*option->target);
             m_unit->path = nullptr;
             m_unit->move_to_grid_x = option->target->grid_x;
             m_unit->move_to_grid_y = option->target->grid_y;
 
-            UnitsManager_SetNewOrder(&*m_unit, ORDER_MOVE_TO_ATTACK, ORDER_STATE_EXECUTING_ORDER);
+            const bool in_range = Access_IsWithinAttackRange(&*m_unit, option->target->grid_x, option->target->grid_y,
+                                                             m_unit->GetBaseValues()->GetAttribute(ATTRIB_RANGE));
+
+            UnitsManager_SetNewOrder(&*m_unit, ORDER_MOVE_TO_ATTACK,
+                                     in_range ? ORDER_STATE_EXECUTING_ORDER : ORDER_STATE_MOVE_INIT);
 
             ++m_turn_attacks;
             m_wait_start = SDL_GetTicks();
@@ -2950,6 +4423,8 @@ void JevAi::Apply(const std::string& answer) {
         } break;
 
         case Action::MOVE: {
+            m_scripted = option->data.value("action", "") == "hold";
+
             if (option->data.value("action", "") == "picket") {
                 const uint32_t id = m_unit->GetId();
 
@@ -2993,10 +4468,28 @@ void JevAi::BeginTurn() {
         m_lost.clear();
         m_sites.clear();
         m_sightings.clear();
+        m_threats.clear();
+        m_idle_factories.clear();
+        m_idle_builders.clear();
+        m_enemy_army.clear();
         m_links.clear();
         m_pickets.clear();
         m_raw_full_turns = 0;
         m_raw_lost = 0;
+        m_defend_size = 4;
+        m_scout_size = 1;
+        m_posts.clear();
+        m_interceptors.clear();
+        m_command_trigger.clear();
+        m_last_command_turn = -100;
+        m_last_command_reason.clear();
+        m_enemy_seen = false;
+        m_enemy_base_seen = false;
+        m_enemy_air_seen = false;
+        m_command_enemy_seen = false;
+        m_command_enemy_base_seen = false;
+        m_command_enemy_air_seen = false;
+        m_defenders_at_command = 0;
     }
 
     m_last_turn = GameManager_TurnCounter;
@@ -3028,6 +4521,23 @@ void JevAi::BeginTurn() {
 
     BalanceEconomy();
     RememberEnemies();
+    AssignInterceptors();
+    CheckCommandTriggers();
+
+    // posts of lost units are free again
+    m_posts.erase(std::remove_if(m_posts.begin(), m_posts.end(),
+                                 [this](const auto& post) {
+                                     for (auto it = UnitsManager_MobileLandSeaUnits.Begin(),
+                                               it_end = UnitsManager_MobileLandSeaUnits.End();
+                                          it != it_end; ++it) {
+                                         if ((*it).GetId() == post.first && IsDefender(it->Get())) {
+                                             return false;
+                                         }
+                                     }
+
+                                     return true;
+                                 }),
+                  m_posts.end());
 
     // raw materials mined while the base storage is full are lost
     if (Complex* complex = GetEconomyComplex()) {
@@ -3055,7 +4565,9 @@ void JevAi::BeginTurn() {
                                if ((*it).GetId() == picket.first && (*it).team == m_team && (*it).hits > 0) {
                                    if (JevAi_GetDistance(Point((*it).grid_x, (*it).grid_y), picket.second) <= 1 &&
                                        (*it).GetOrder() == ORDER_AWAIT) {
-                                       UnitsManager_SetNewOrder(it->Get(), ORDER_SENTRY, ORDER_STATE_INIT);
+                                       // as the game's own sentry (units_manager.cpp): a sentry left in the init state
+                                       // counts as a pending order, and the end of turn waits for it for good
+                                       UnitsManager_SetNewOrder(it->Get(), ORDER_SENTRY, ORDER_STATE_EXECUTING_ORDER);
                                    }
 
                                    return false;
@@ -3111,6 +4623,40 @@ void JevAi::BeginTurn() {
 
     SDL_Log("Jev %s: turn %d, %d units, buildings:%s", GetTeamName(), GameManager_TurnCounter,
             static_cast<int32_t>(m_units.size()), buildings.c_str());
+}
+
+bool JevAi::SetupStrategy() {
+    // The classic AI picks the strategy, landing site and clan and spends the starting credits; log what it bought.
+    const bool result = NoneAi::SetupStrategy();
+
+    if (result) {
+        static const char* const strategy_names[AI_STRATEGY_MAX] = {
+            "random", "defensive", "missiles", "air", "sea", "scout horde", "tank horde", "fast attack",
+            "combined arms", "espionage"};
+        const TeamMissionSupplies& supplies = UnitsManager_TeamMissionSupplies[m_team];
+        const int32_t strategy = AiPlayer_Teams[m_team].GetStrategy();
+        std::string loadout;
+        std::string bought;
+
+        for (uint32_t i = 0; i < supplies.units.GetCount(); ++i) {
+            std::string& list = (i < supplies.unit_count) ? loadout : bought;
+
+            list += (list.empty() ? " " : ", ") + JevAi_GetTypeName(*supplies.units[i]);
+
+            if (*supplies.cargos[i]) {
+                list += " (" + std::to_string(*supplies.cargos[i]) + " raw materials)";
+            }
+        }
+
+        SDL_Log("Jev %s: setup by the classic AI: strategy %s, clan %s, credits %d, %d left; mission units:%s; bought:%s",
+                GetTeamName(),
+                (strategy >= 0 && strategy < AI_STRATEGY_MAX) ? strategy_names[strategy] : "unknown",
+                ResourceManager_GetClanID(static_cast<TeamClanType>(UnitsManager_TeamInfo[m_team].team_clan)).c_str(),
+                supplies.start_gold, supplies.team_gold, loadout.empty() ? " none" : loadout.c_str(),
+                bought.empty() ? " nothing" : bought.c_str());
+    }
+
+    return result;
 }
 
 bool JevAi::CheckEndTurn() {
@@ -3231,6 +4777,13 @@ bool JevAi::CheckEndTurn() {
                 SDL_Log("Jev %s: %s did not move.", GetTeamName(), JevAi_GetUnitName(&*m_unit).c_str());
             }
 
+            if (m_scripted) {
+                m_scripted = false;
+                FinishUnit();
+
+                return false;
+            }
+
             if (!is_idle || m_unit->speed == 0 || m_unit_picks >= JevAi_MaxPicksPerUnit) {
                 FinishUnit();
 
@@ -3247,6 +4800,15 @@ bool JevAi::CheckEndTurn() {
             }
 
             if (m_turn_questions < JevAi_MaxQuestionsPerTurn) {
+                if (!m_unit && !m_command_trigger.empty()) {
+                    if (AskCommand()) {
+                        m_wait_start = SDL_GetTicks();
+                        m_state = State::WAIT_FOR_ANSWER;
+                    }
+
+                    return true;
+                }
+
                 if (!m_unit && ReleaseFinishedUnit()) {
                     return true;
                 }
@@ -3259,6 +4821,49 @@ bool JevAi::CheckEndTurn() {
                         m_options.clear();
                         AddProduceOptions(factory);
                         m_question = "production";
+
+                        // air defense once enemy aircraft are seen, without a question
+                        auto flak = std::find_if(m_options.begin(), m_options.end(), [](const Option& option) {
+                            return option.action == Action::PRODUCE && option.unit_type == SP_FLAK;
+                        });
+
+                        if (flak != m_options.end()) {
+                            ApplyScripted(*flak, "enemy aircraft were seen");
+
+                            return true;
+                        }
+
+                        // after "produce nothing" a factory is asked again only when its choices change: other unit
+                        // types offered, or the base storage filling up (j5/j6: 85% of factory questions were
+                        // nothing, 78% the same answer as before)
+                        Cargo stock;
+                        Cargo capacity;
+                        std::string signature;
+
+                        if (factory->GetComplex()) {
+                            factory->GetComplex()->GetCargoInfo(stock, capacity);
+                        }
+
+                        for (const auto& option : m_options) {
+                            const std::string type = option.data.value("type", "");
+
+                            if (!type.empty() && signature.find("|" + type + "|") == std::string::npos) {
+                                signature += "|" + type + "|";
+                            }
+                        }
+
+                        signature += (capacity.raw > 0 && stock.raw * 5 >= capacity.raw * 4) ? "full" : "";
+                        signature += CountOwnUnits(CONSTRCT) < 2 ? "|few constructors" : "";
+                        signature += CountOwnUnits(ENGINEER) < 2 ? "|few engineers" : "";
+                        m_factory_signature = signature;
+
+                        auto idle = m_idle_factories.find(factory->GetId());
+
+                        if (idle != m_idle_factories.end() && idle->second == signature) {
+                            FinishUnit();
+
+                            return true;
+                        }
 
                         if (m_options.size() > 1 && Ask(factory, JevAi_FactoryInstructions)) {
                             m_wait_start = SDL_GetTicks();
@@ -3279,10 +4884,59 @@ bool JevAi::CheckEndTurn() {
 
                         // a picket on sentry is asked again only when an enemy comes in sight
                         int32_t nearest_enemy = -1;
+                        Point raider;
                         const bool quiet_sentry =
                             unit->GetOrder() == ORDER_SENTRY &&
                             GetDanger(&*unit, Point(unit->grid_x, unit->grid_y), &nearest_enemy) == 0 &&
-                            (nearest_enemy < 0 || nearest_enemy > unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN));
+                            (nearest_enemy < 0 || nearest_enemy > unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN)) &&
+                            !(IsInterceptor(&*unit) && FindRaider(&*unit, raider));
+
+                        if (unit->hits > 0 && unit->GetUnitType() == SURVEYOR) {
+                            if (!unit->auto_survey && Task_IsReadyToTakeOrders(&*unit)) {
+                                SDL_Log("Jev %s: Surveyor at %s surveys by itself.", GetTeamName(),
+                                        JevAi_FormatPoint(Point(unit->grid_x, unit->grid_y)).c_str());
+
+                                if (unit->GetOrder() == ORDER_SENTRY) {
+                                    UnitsManager_SetNewOrder(&*unit, ORDER_AWAIT, ORDER_STATE_EXECUTING_ORDER);
+                                }
+
+                                unit->auto_survey = true;
+                                Ai_EnableAutoSurvey(&*unit);
+                            }
+
+                            m_units.erase(m_units.begin());
+                            continue;
+                        }
+
+                        if (unit->hits > 0 && Task_IsReadyToTakeOrders(&*unit) && !quiet_sentry &&
+                            (unit->GetUnitType() == SCOUT || unit->GetUnitType() == SCANNER)) {
+                            const int32_t scripted = unit->GetUnitType() == SCANNER ? ScriptScanner(&*unit)
+                                                     : IsInterceptor(&*unit)        ? ScriptInterceptor(&*unit)
+                                                                                    : ScriptScout(&*unit);
+
+                            if (scripted > 0) {
+                                return true;
+                            }
+
+                            if (scripted == 0) {
+                                m_units.erase(m_units.begin());
+                                continue;
+                            }
+                        }
+
+                        if (unit->hits > 0 && Task_IsReadyToTakeOrders(&*unit) && !quiet_sentry &&
+                            IsDefender(&*unit)) {
+                            const int32_t scripted = ScriptDefender(&*unit);
+
+                            if (scripted > 0) {
+                                return true;
+                            }
+
+                            if (scripted == 0) {
+                                m_units.erase(m_units.begin());
+                                continue;
+                            }
+                        }
 
                         if (unit->hits > 0 && Task_IsReadyToTakeOrders(&*unit) && !quiet_sentry &&
                             (unit->speed > 0 || JevAi_IsBuilder(unit->GetUnitType()))) {
@@ -3299,11 +4953,17 @@ bool JevAi::CheckEndTurn() {
                 if (!m_turn_done_logged) {
                     m_turn_done_logged = true;
 
+                    int32_t surveyed = 0;
+
+                    for (int32_t cell = 0; cell < ResourceManager_MapSize.x * ResourceManager_MapSize.y; ++cell) {
+                        surveyed += (ResourceManager_CargoMap[cell] & UnitsManager_TeamInfo[m_team].team_units->hash_team_id) != 0;
+                    }
+
                     SDL_Log(
                         "Jev %s: turn %d done: %d questions, %d moves, %d did not move, %d builds started, %d "
-                        "attacks, %d cells explored, %d units lost.",
+                        "attacks, %d cells explored, %d cells surveyed, %d units lost.",
                         GetTeamName(), GameManager_TurnCounter, m_turn_questions, m_turn_moves, m_turn_failed_moves,
-                        m_turn_builds, m_turn_attacks, m_explored_cells, m_units_lost);
+                        m_turn_builds, m_turn_attacks, m_explored_cells, surveyed, m_units_lost);
                 }
 
                 return AiController_EndTurn(m_team);
@@ -3317,13 +4977,19 @@ bool JevAi::CheckEndTurn() {
 
             const bool is_construction = JevAi_IsConstructionUnit(m_unit->GetUnitType());
 
+            ComputeReach(&*m_unit);
             m_options.clear();
+
+            const bool defender = IsDefender(&*m_unit);
 
             if (!is_construction) {
                 AddAttackOptions(&*m_unit);
+                AddChargeOptions(&*m_unit);
             }
 
-            AddMoveOptions(&*m_unit);
+            if (!defender || danger_here > 0) {
+                AddMoveOptions(&*m_unit);
+            }
 
             if (JevAi_IsBuilder(m_unit->GetUnitType())) {
                 AddBuildOptions(&*m_unit);
@@ -3334,8 +5000,11 @@ bool JevAi::CheckEndTurn() {
                 AddSurveyOptions(&*m_unit);
             }
 
-            if (m_unit->GetUnitType() == SCOUT || m_unit->GetUnitType() == SCANNER) {
+            if ((m_unit->GetUnitType() == SCOUT && !IsInterceptor(&*m_unit)) || m_unit->GetUnitType() == SCANNER) {
                 AddScoutOptions(&*m_unit);
+
+            } else if (defender || IsInterceptor(&*m_unit)) {
+                AddHoldOption(&*m_unit);
             }
 
             m_options.push_back({"stay",
@@ -3348,6 +5017,79 @@ bool JevAi::CheckEndTurn() {
                                  {{"action", "stay"}, {"danger", danger_here}}});
             m_question = is_construction ? "construction" : "military";
             ++m_unit_picks;
+
+            // counter-battery without a question: a long range unit with an outranging enemy in range fires at it, the
+            // one nearest to destruction first
+            {
+                const Option* battery = nullptr;
+
+                for (const Option& option : m_options) {
+                    if (option.action == Action::ATTACK && option.data.value("counter_battery", false) &&
+                        option.data.value("in_range", false) &&
+                        (!battery || option.data.value("hits", 0) < battery->data.value("hits", 0))) {
+                        battery = &option;
+                    }
+                }
+
+                if (battery) {
+                    const Option chosen = *battery;
+
+                    ApplyScripted(chosen, "counter-battery");
+
+                    return true;
+                }
+            }
+
+            // a builder that can only refill or stay refills: Jev chose the refill 357 times of 358 (j7-groups4)
+            if (is_construction && std::all_of(m_options.begin(), m_options.end(), [](const Option& option) {
+                    return option.action == Action::STAY || option.data.value("action", "") == "refill";
+                }) && m_options.size() == 2) {
+                const Option refill = m_options.front();
+
+                ApplyScripted(refill, "only a refill");
+
+                return true;
+            }
+
+            // a builder that chose to stay is asked again only when its choices change, as factories are (j7-groups4:
+            // 200 of 1124 construction questions answered stay)
+            if (is_construction) {
+                std::set<std::string> kinds;
+
+                for (const Option& option : m_options) {
+                    kinds.insert(option.data.value("action", "") + ":" + option.data.value("type", "") + ":" +
+                                 option.data.value("from", ""));
+                }
+
+                std::string signature = std::to_string(m_unit->storage / 10);
+
+                for (const std::string& kind : kinds) {
+                    signature += "|" + kind;
+                }
+
+                m_builder_signature = signature;
+
+                auto idle = m_idle_builders.find(m_unit->GetId());
+
+                if (idle != m_idle_builders.end() && idle->second == signature) {
+                    FinishUnit();
+
+                    return true;
+                }
+            }
+
+            if (m_enemy_air_seen && JevAi_IsBuilder(m_unit->GetUnitType()) &&
+                CountAntiAirTurrets() < JevAi_AntiAirTurrets) {
+                auto turret = std::find_if(m_options.begin(), m_options.end(), [](const Option& option) {
+                    return option.action == Action::BUILD && option.unit_type == ANTIAIR;
+                });
+
+                if (turret != m_options.end()) {
+                    ApplyScripted(*turret, "enemy aircraft were seen");
+
+                    return true;
+                }
+            }
 
             if (m_options.size() > 1 &&
                 Ask(&*m_unit, is_construction ? JevAi_ConstructionInstructions : JevAi_MilitaryInstructions)) {
