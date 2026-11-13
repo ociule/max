@@ -145,6 +145,10 @@ void GameStats_TimeLimit(uint64_t time_limit_ms);
 void GameStats_PathDelivered(uint64_t dispatch_tick, uint64_t dispatch_ns);
 void GameStats_EndTurnIdle(uint32_t idle_ticks);
 void GameStats_AttackLanded(uint16_t attacker_team);
+class UnitInfo;
+
+/// Logs a hit in command line games: who hit what, from how far, and whether the target could fire back.
+void GameStats_HitLanded(UnitInfo* attacker, UnitInfo* target, int32_t damage);
 
 /// Counts a failed assertion (hidden games log and ignore them).
 void GameStats_Assertion();

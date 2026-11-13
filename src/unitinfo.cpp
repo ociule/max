@@ -1560,6 +1560,7 @@ void UnitInfo::AttackUnit(UnitInfo* enemy, int32_t attack_potential, int32_t dir
 
     if (hits > 0) {
         GameStats_AttackLanded(enemy->team);
+        GameStats_HitLanded(enemy, this, attack_damage);
 
         damaged_this_turn = true;
 

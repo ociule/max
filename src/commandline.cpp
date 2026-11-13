@@ -21,6 +21,8 @@
 
 #include "commandline.hpp"
 
+#include <map>
+
 #include <SDL3/SDL.h>
 
 #include <cstdio>
@@ -415,6 +417,33 @@ bool CommandLine_LogResult(const WinLoss_Status& status, int32_t turn) {
     }
 
     SDL_Log("Command line: %s", line.c_str());
+
+    // what each team owns, by type and with its worth, to tell where a lead in worth comes from
+    for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
+        if (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE) {
+            std::map<std::string, std::pair<int32_t, int32_t>> assets;
+
+            for (SmartList<UnitInfo>* list :
+                 {&UnitsManager_MobileLandSeaUnits, &UnitsManager_MobileAirUnits, &UnitsManager_StationaryUnits}) {
+                for (auto it = list->Begin(), it_end = list->End(); it != it_end; ++it) {
+                    if ((*it).team == team) {
+                        auto& entry = assets[std::string(ResourceManager_GetUnit((*it).GetUnitType()).GetSingularName())];
+
+                        ++entry.first;
+                        entry.second += (*it).GetNormalRateBuildCost();
+                    }
+                }
+            }
+
+            std::string owned = std::string("Assets of ") + CommandLine_TeamNames[team] + ":";
+
+            for (const auto& [name, entry] : assets) {
+                owned += " " + std::to_string(entry.first) + " " + name + " (" + std::to_string(entry.second) + "),";
+            }
+
+            SDL_Log("Command line: %s", owned.c_str());
+        }
+    }
 
     GameStats_EndGame();
 

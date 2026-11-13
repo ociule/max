@@ -778,6 +778,34 @@ void GameStats_EndTurnIdle(uint32_t idle_ticks) {
 
 void GameStats_Assertion() { ++GameStats_Turn.assertions; }
 
+void GameStats_HitLanded(UnitInfo* attacker, UnitInfo* target, int32_t damage) {
+    static const char* const team_names[] = {"red", "green", "blue", "gray", "alien"};
+
+    if (!GameStats_Enabled || !attacker || !target || attacker->team >= std::size(team_names) ||
+        target->team >= std::size(team_names)) {
+        return;
+    }
+
+    const int32_t distance =
+        static_cast<int32_t>(SDL_sqrt(Access_GetSquaredDistance(attacker, Point(target->grid_x, target->grid_y))));
+    const int32_t target_range = target->GetBaseValues()->GetAttribute(ATTRIB_RANGE);
+    const bool fires_back = target->GetBaseValues()->GetAttribute(ATTRIB_ATTACK) > 0 && target->ammo > 0 &&
+                            Access_IsValidAttackTargetType(target->GetUnitType(), attacker->GetUnitType()) &&
+                            distance <= target_range;
+
+    SDL_Log("Hit: %s %s at [%d,%d] range %d -> %s %s at [%d,%d], %d damage, %d hits left, distance %d, target %s, "
+            "ammo %d.",
+            team_names[attacker->team], ResourceManager_GetUnit(attacker->GetUnitType()).GetSingularName().data(),
+            attacker->grid_x + 1, attacker->grid_y + 1, attacker->GetBaseValues()->GetAttribute(ATTRIB_RANGE),
+            team_names[target->team], ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(),
+            target->grid_x + 1, target->grid_y + 1, damage, std::max(0, target->hits - damage), distance,
+            fires_back ? "can fire back"
+                       : (target->GetBaseValues()->GetAttribute(ATTRIB_ATTACK) == 0
+                              ? "unarmed"
+                              : (target->ammo == 0 ? "out of ammo" : "outranged or wrong target type")),
+            target->ammo);
+}
+
 void GameStats_AttackLanded(uint16_t attacker_team) {
     if (attacker_team < PLAYER_TEAM_MAX) {
         ++GameStats_AttacksLanded[attacker_team];

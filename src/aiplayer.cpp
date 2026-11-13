@@ -1330,6 +1330,10 @@ void AiPlayer::RollTeamMissionSupplies(int32_t clan) {
         }
     }
 
+    // as the purchase menu does: what the team started with and which units were free, for the logs
+    mission_supplies->start_gold = mission_supplies->team_gold;
+    mission_supplies->unit_count = mission_supplies->units.GetCount();
+
     switch (strategy) {
         case AI_STRATEGY_DEFENSIVE: {
             if (clan != TEAM_CLAN_AXIS_INC) {

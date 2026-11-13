@@ -2587,7 +2587,9 @@ void UnitsManager_PerformAutoSurvey(UnitInfo* unit) {
         if (GameManager_IsActiveTurn(unit->team)) {
             if (unit->auto_survey && unit->speed) {
                 if (!Remote_IsNetworkGame || !UnitsManager_TeamInfo[unit->team].finished_turn) {
-                    if (UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER ||
+                    // the classic AI surveys with its own tasks; other controllers use auto survey as a player does
+                    if ((UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER &&
+                         AiController_IsClassic(unit->team)) ||
                         UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_REMOTE) {
                         unit->auto_survey = false;
 
