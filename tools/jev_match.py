@@ -3,12 +3,17 @@
 
     python3 tools/jev_match.py --name m13 -- --controllers jev,classic --turns 100 --seed 42
 
-Everything after -- goes to the game (see max-port --help); --hidden is added. The game runs under wine from a game
+Everything after -- goes to the game (see max-port --help); --hidden is added unless --visible is given. To play
+against Jev yourself (red is you, green is Jev):
+
+    python3 tools/jev_match.py --visible --timeout 0 --name play1 -- --teams player,computer --controllers classic,jev
+ The game runs under wine from a game
 folder runs/slots/gameN, one per game running at the same time. A slot holds links to the shared game files in
 runs/base, a copy of the exe and the files the game writes. runs/base is a game folder with the original assets and
 the port's resources, made once by hand.
 
-runs/NAME/ gets game.log (the game's stdout.txt), questions.jsonl (every Jev question and answer), bridge.log and
+runs/NAME/ gets game.log (the game's stdout.txt), stats.jsonl (time, AI cutoffs and consistency checks per team turn,
+see src/gamestats.hpp), questions.jsonl (every Jev question and answer), bridge.log and
 run.json (arguments, exe hash, git commit, start and end, the game over line). runs/ is not in git.
 """
 
@@ -148,7 +153,8 @@ def main():
     parser.add_argument('--exe', default=str(DEFAULT_EXE), help='the game to run')
     parser.add_argument('--mock', action='store_true', help='answer with the bridge mock instead of Jev')
     parser.add_argument('--force', action='store_true', help='replace an existing run folder')
-    parser.add_argument('--timeout', type=float, default=3600, help='maximum game duration in seconds')
+    parser.add_argument('--timeout', type=float, default=3600, help='maximum game duration in seconds, 0: none')
+    parser.add_argument('--visible', action='store_true', help='show the game window (to watch or play)')
     parser.add_argument('--model', default='jev-latest', help='Jev model version (pin for comparisons)')
     parser.add_argument('--max-calls', type=int, default=5000, help='maximum paid requests')
     parser.add_argument('--max-input-tokens', type=int, default=5_000_000,
@@ -178,8 +184,10 @@ def main():
         silence(slot / 'settings.json')
         shutil.copy2(ROOT / 'tools' / 'jev_prompts.py', run / 'prompts.py')
         (slot / 'stdout.txt').unlink(missing_ok=True)
+        (slot / 'stats.jsonl').unlink(missing_ok=True)
 
-        info = {'name': name, 'game_args': game_args, 'exe': args.exe, 'exe_sha256': file_hash(args.exe),
+        info = {'name': name, 'game_args': game_args, 'visible': args.visible, 'exe': args.exe,
+                'exe_sha256': file_hash(args.exe),
                 'git_commit': git_commit(), 'slot': slot.name, 'port': port, 'mock': args.mock,
                 'start': time.time(), 'prompts_sha256': file_hash(run / 'prompts.py'), 'model': args.model,
                 'max_calls': args.max_calls, 'max_input_tokens': args.max_input_tokens}
@@ -202,9 +210,19 @@ def main():
                 environment = dict(os.environ, MAX_JEV_BRIDGE_PORT=str(port))
                 # the game's stderr says why it stopped when it crashes (wine and C++ runtime messages)
                 with open(run / 'stderr.log', 'w') as game_errors:
-                    game = subprocess.Popen(['wine', 'max-port.exe', *game_args, '--hidden'], cwd=slot,
+                    hidden = [] if args.visible else ['--hidden']
+                    game = subprocess.Popen(['wine', 'max-port.exe', *game_args, *hidden], cwd=slot,
                                             env=environment, stdout=subprocess.DEVNULL, stderr=game_errors)
-                    game.wait(timeout=args.timeout)
+                    # the game ends, the time is up, or the bridge stops (no Jev credits): a game without answers
+                    # is no test
+                    deadline = time.time() + args.timeout if args.timeout > 0 else float('inf')
+                    while game.poll() is None:
+                        if bridge.poll() is not None:
+                            raise RuntimeError('Jev billing error: no credits left' if bridge.returncode == 3
+                                               else f'Bridge stopped with exit code {bridge.returncode}')
+                        if time.time() > deadline:
+                            raise subprocess.TimeoutExpired(game.args, args.timeout)
+                        time.sleep(1)
             except (Exception, KeyboardInterrupt) as error:
                 failure = f'{type(error).__name__}: {error}'
             finally:
@@ -213,6 +231,8 @@ def main():
 
         if (slot / 'stdout.txt').exists():
             shutil.copy2(slot / 'stdout.txt', run / 'game.log')
+        if (slot / 'stats.jsonl').exists():
+            shutil.copy2(slot / 'stats.jsonl', run / 'stats.jsonl')
 
         result = ''
         if (run / 'game.log').exists():
@@ -228,6 +248,8 @@ def main():
 
         minutes = (info['end'] - info['start']) / 60
         print(f'{name}: {minutes:.1f} min, {result or failure or "no game over line, exit code " + str(exit_code)}')
+        if failure and 'billing' in failure:
+            raise SystemExit(2)
         if failure or exit_code != 0 or not result:
             raise SystemExit(1)
 

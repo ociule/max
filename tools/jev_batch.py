@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
-"""Run a batch of Jev against classic games in parallel and print one result table.
+"""Run a batch of Jev against classic games, one at a time by default, and print one result table.
 
     python3 tools/jev_batch.py --label b1
     python3 tools/jev_batch.py --label b1 --games 0:42,3:7,6:13 --turns 100
+    python3 tools/jev_batch.py --label b2 --games dev --model jev-1.14.0
+    python3 tools/jev_batch.py --label c1 --games dev --controllers classic,classic --mock --repeats 2
     python3 tools/jev_batch.py --summarize b1          the table of a batch run before
+
+--games takes world:seed pairs or a named set: quick (the usual batch, with --repeats 2), dev (tune on these) or
+heldout (confirm only, never tune on these).
 
 Each game is world:seed, played with tools/jev_match.py as runs/LABEL-wWORLD-sSEED/. The table goes to the screen and
 to runs/LABEL.md, the numbers to runs/LABEL.json. For the Jev team (red unless --controllers says otherwise):
 rank, points, asset worth against the best other team, the turn its first factory stood, the turn it first had
-points, units and buildings lost, questions asked and their input tokens.
+points, units and buildings lost, questions asked and their input tokens. Without a Jev team, --team says which
+team the table is about (classic vs classic: the seat baseline).
+
+Each game's stats.jsonl (src/gamestats.hpp) gives the validity columns. The classic AI thinks for a fixed time per
+tick, so a busy machine weakens it: "classic cutoffs" is how often its time checks stopped work with work left, per
+1000 checks, over the classic teams' turns; compare it with a batch run one game at a time. A game is falsified when
+an end of turn wait was abandoned or an assertion failed.
 """
 
 import argparse
@@ -17,24 +28,70 @@ import json
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNS = ROOT / 'runs'
 TEAMS = ['red', 'green', 'blue', 'gray']
+GAME_SETS = {
+    # the usual batch (the user, 2026-11-13): 4 maps, run with --repeats 2; classic as red wins worlds 0 and 3,
+    # splits world 6 and loses world 9
+    'quick': '0:42,3:7,6:13,9:21',
+    'dev': '0:42,3:7,6:13,9:21,12:5,14:33,16:8,18:11,20:17,22:3,1:60,10:44',
+    'heldout': '2:29,5:101,8:71,13:90,17:55,21:14',
+}
 FACTORIES = ('Heavy Vehicle Plant', 'Light Vehicle Plant', 'Air Units Plant', 'Shipyard', 'Training Hall')
 
 
-def run_game(label, world, seed, turns, controllers, mock, model, max_calls, max_input_tokens, exe):
-    name = f'{label}-w{world}-s{seed}'
+# set when a game ends on a Jev billing error: the games after it would get no answers
+NO_CREDITS = threading.Event()
+
+
+def run_game(name, world, seed, turns, controllers, mock, model, max_calls, max_input_tokens, exe):
+    if NO_CREDITS.is_set():
+        print(f'{name}: not started, Jev has no credits left', flush=True)
+        return 2
     command = [sys.executable, str(ROOT / 'tools' / 'jev_match.py'), '--name', name, '--model', model,
                '--max-calls', str(max_calls), '--max-input-tokens', str(max_input_tokens)] + \
               (['--mock'] if mock else []) + (['--exe', exe] if exe else []) + \
               ['--', '--controllers', controllers, '--world', str(world), '--seed', str(seed), '--turns', str(turns)]
-    return subprocess.run(command, check=False).returncode
+    code = subprocess.run(command, check=False).returncode
+    if code == 2:
+        NO_CREDITS.set()
+    return code
 
 
-def summarize_game(name, jev_team):
+def summarize_stats(run, result, classic_teams):
+    path = run / 'stats.jsonl'
+    if not path.exists():
+        return
+    checks = cutoffs = left = by_timer = abandoned = assertions = violations = 0
+    for line in path.read_text().splitlines():
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get('type') != 'team_turn':
+            continue
+        abandoned += entry['end_turn']['wait_abandoned']
+        assertions += entry['assertions']
+        violations += entry['consistency']['violations']
+        if entry['team'] in classic_teams:
+            for site_checks, site_cutoffs in entry['budget_checks_cutoffs'].values():
+                checks += site_checks
+                cutoffs += site_cutoffs
+            left += entry['reminders_left_at_cutoffs']
+            by_timer += entry['end_turn']['by_timer']
+    result['classic_cutoffs'] = round(1000 * cutoffs / checks, 3) if checks else None
+    result['classic_reminders_left'] = left
+    result['classic_turns_by_timer'] = by_timer
+    result['waits_abandoned'], result['assertions'], result['violations'] = abandoned, assertions, violations
+    if abandoned or assertions:
+        result['status'] = 'falsified'
+
+
+def summarize_game(name, jev_team, classic_teams=()):
     run = RUNS / name
     log = (run / 'game.log').read_text(errors='replace') if (run / 'game.log').exists() else ''
     info_path = run / 'run.json'
@@ -100,18 +157,41 @@ def summarize_game(name, jev_team):
     tokens = 0
     errors = 0
     budget_exhausted = False
+    by_question = {}
+    commands = []
     if (run / 'questions.jsonl').exists():
         for line in (run / 'questions.jsonl').read_text().splitlines():
             entry = json.loads(line)
             if entry['request'].get('team') == jev_team:
                 questions += 1
-                tokens += (entry['reply'].get('usage') or {}).get('input_tokens', 0)
+                used = (entry['reply'].get('usage') or {}).get('input_tokens', 0)
+                tokens += used
+                name = next(iter(entry['request'].get('questions', {})), '?')
+                by_question[name] = by_question.get(name, 0) + used
+                if name == 'command':
+                    option = entry['request'].get('options', {}).get(entry['reply'].get('choice'), {})
+                    commands.append(f"t{entry['request']['state'].get('turn')} {option.get('action', '?')} "
+                                    f"{option.get('size', '')}".strip())
                 errors += bool(entry['reply'].get('error') or entry['request'].get('template_error'))
                 budget_exhausted |= entry['reply'].get('budget_exhausted', False)
     result['questions'], result['input_tokens'] = questions, tokens
+    result['tokens_by_question'], result['commands'] = by_question, commands
+
+    # Eco-spheres standing but not working, per turn; air defense at the end
+    eco_off = 0
+    for line in log.splitlines():
+        match = re.search(rf'Jev {jev_team}: turn \d+, \d+ units, buildings:(.*)', line)
+        if match and re.search(r'Eco-sphere \((?!Power On)', match.group(1)):
+            eco_off += 1
+        match = re.search(rf'Command line: Assets of {jev_team}:(.*)', line)
+        if match:
+            result['anti_air'] = sum(int(n) for n, _ in re.findall(r'(\d+) (Mobile Anti Aircraft|Anti Aircraft) \(',
+                                                                      match.group(1)))
+    result['eco_off_turns'] = eco_off
     result['errors'], result['budget_exhausted'] = errors, budget_exhausted
     if errors:
         result['status'] = 'budget exhausted' if budget_exhausted else 'errors'
+    summarize_stats(run, result, classic_teams)
     return result
 
 
@@ -122,7 +202,9 @@ def table(results):
 
     header = ('| game | status | turns | rank | points | enemy points | worth | enemy worth | units / buildings | '
               'enemy units / buildings | first factory | first points | mines | second mine | raw per turn | raw lost | '
-              'lost | enemy lost | questions | cost |')
+              'lost | enemy lost | questions | cost | military / construction / production / command cost | '
+              'eco off turns | anti air | classic cutoffs | turns by timer | abandoned waits | assertions | '
+              'violations |')
     lines = [header, '|' + '---|' * (header.count('|') - 1)]
     for row in results:
         cost = row.get('input_tokens', 0) * 0.042 / 1e6
@@ -133,46 +215,66 @@ def table(results):
             cell(row, 'first_points_turn'), cell(row, 'mines_max'), cell(row, 'second_mine_turn'),
             cell(row, 'raw_per_turn'), cell(row, 'raw_lost'), cell(row, 'lost'),
             cell(row, 'enemy_lost'), cell(row, 'questions'),
-            f'${cost:.3f}']) + ' |')
+            f'${cost:.3f}', ' / '.join(f"${row.get('tokens_by_question', {}).get(name, 0) * 0.042 / 1e6:.3f}"
+                                       for name in ('military', 'construction', 'production', 'command')),
+            cell(row, 'eco_off_turns'), cell(row, 'anti_air'), cell(row, 'classic_cutoffs'), cell(row, 'classic_turns_by_timer'),
+            cell(row, 'waits_abandoned'), cell(row, 'assertions'), cell(row, 'violations')]) + ' |')
     return '\n'.join(lines)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--label', help='batch name')
-    parser.add_argument('--games', default='0:42,3:7,6:13', help='comma separated world:seed list')
+    parser.add_argument('--games', default='0:42,3:7,6:13', help='comma separated world:seed list, or dev or heldout')
+    parser.add_argument('--parallel', type=int, default=1, help='games at the same time (default 1)')
+    parser.add_argument('--repeats', type=int, default=1, help='games per world:seed (run folders get -rN)')
+    parser.add_argument('--team', help='the team the table is about (default: the Jev team)')
     parser.add_argument('--turns', type=int, default=100)
     parser.add_argument('--controllers', default='jev,classic')
     parser.add_argument('--mock', action='store_true', help='mock Jev answers, to test the batch itself')
     parser.add_argument('--model', default='jev-latest')
     parser.add_argument('--max-calls', type=int, default=5000, help='maximum paid requests per game')
-    parser.add_argument('--max-input-tokens', type=int, default=5_000_000, help='input-token threshold per game')
+    parser.add_argument('--max-input-tokens', type=int, default=8_000_000, help='input-token threshold per game')
     parser.add_argument('--exe', help='the game to run (default: the current build, see jev_match.py)')
     parser.add_argument('--summarize', metavar='LABEL', help='only print the table of an earlier batch')
     args = parser.parse_args()
 
-    jev_team = TEAMS[args.controllers.split(',').index('jev')]
-    games = [tuple(int(x) for x in game.split(':')) for game in args.games.split(',')]
+    controllers = args.controllers.split(',')
+    if args.team:
+        jev_team = args.team
+    elif 'jev' in controllers:
+        jev_team = TEAMS[controllers.index('jev')]
+    else:
+        parser.error('no Jev team: give --team')
+    classic_teams = [TEAMS[i] for i, controller in enumerate(controllers) if controller == 'classic']
+    games = [tuple(int(x) for x in game.split(':')) for game in GAME_SETS.get(args.games, args.games).split(',')]
+    games = [(world, seed, repeat) for world, seed in games for repeat in range(1, args.repeats + 1)]
     label = args.summarize or args.label
 
     if not label:
         parser.error('give --label or --summarize')
 
-    names = [f'{label}-w{world}-s{seed}' for world, seed in games]
+    def game_name(world, seed, repeat):
+        return f'{label}-w{world}-s{seed}' + (f'-r{repeat}' if args.repeats > 1 else '')
+
+    names = [game_name(*game) for game in games]
 
     if not args.summarize:
         if len(set(names)) != len(names):
             parser.error('duplicate world:seed pairs would share a run folder')
         if any((RUNS / name).exists() for name in names):
             parser.error('a run folder already exists; use a new label or --summarize')
-        with ThreadPoolExecutor(max_workers=len(games)) as pool:
-            outcomes = list(pool.map(lambda game: run_game(label, *game, args.turns, args.controllers, args.mock,
-                                                         args.model, args.max_calls, args.max_input_tokens,
-                                                         args.exe), games))
+        with ThreadPoolExecutor(max_workers=args.parallel) as pool:
+            outcomes = list(pool.map(lambda game: run_game(game_name(*game), game[0], game[1], args.turns,
+                                                         args.controllers, args.mock, args.model, args.max_calls,
+                                                         args.max_input_tokens, args.exe), games))
     else:
+        # a summary reads the run folders that exist, with or without repeats
+        names = [name for name in names if (RUNS / name).exists()] or \
+                sorted(path.name for path in RUNS.glob(f'{label}-w*') if path.is_dir())
         outcomes = []
 
-    results = [summarize_game(name, jev_team) for name in names]
+    results = [summarize_game(name, jev_team, classic_teams) for name in names]
     text = table(results)
     (RUNS / f'{label}.md').write_text(text + '\n')
     (RUNS / f'{label}.json').write_text(json.dumps(results, indent=2))

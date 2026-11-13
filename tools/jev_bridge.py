@@ -81,6 +81,9 @@ def ask_mock(request):
     return {'choice': choice, 'model': 'mock', 'confidence': 1.0}
 
 
+BILLING_EXIT_CODE = 3
+
+
 class Bridge:
     def __init__(self, args):
         self.args = args
@@ -97,6 +100,7 @@ class Bridge:
         self.calls = 0
         self.input_tokens = 0
         self.log = open(args.log, 'a', encoding='utf-8')
+        self.billing_error = False
 
     def call_model(self, request):
         # Serialize budget accounting across connections so concurrent teams cannot bypass it.
@@ -125,8 +129,16 @@ class Bridge:
             reply = {'error': f'HTTP {error.code}: {error.read().decode(errors="replace")[:500]}'}
         except Exception as error:  # the game must always get an answer
             reply = {'error': f'{type(error).__name__}: {error}'}
+        if 'choice' in reply and hasattr(self.prompts, 'choose'):
+            choice = self.prompts.choose(request, reply)
+            if choice != reply['choice']:
+                reply['jev_choice'], reply['choice'] = reply['choice'], choice
         reply['id'] = request.get('id')
         reply['milliseconds'] = round((time.monotonic() - start) * 1000)
+        if str(reply.get('error', '')).startswith('HTTP 402'):
+            # no credits: every further answer fails, and a game without answers is no test; the match runner sees
+            # the bridge stop and ends the game
+            self.billing_error = True
         with self.log_lock:
             self.log.write(json.dumps({'time': time.time(), 'request': request, 'reply': reply}) + '\n')
             self.log.flush()
@@ -150,6 +162,9 @@ class Bridge:
                     reply = self.answer(request)
                 stream.write((json.dumps(reply) + '\n').encode())
                 stream.flush()
+                if self.billing_error:
+                    print('Jev billing error: no credits left, the bridge stops', flush=True)
+                    os._exit(BILLING_EXIT_CODE)
 
     def run(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
