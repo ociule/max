@@ -2262,7 +2262,7 @@ void UnitsManager_ResolvePowerCaptures() {
     for (auto it = UnitsManager_StationaryUnits.Begin(); it != UnitsManager_StationaryUnits.End(); ++it) {
         auto& unit = *it;
         if ((unit.flags & (CONNECTOR_UNIT | BUILDING | STANDALONE)) && !(unit.flags & GROUND_COVER) &&
-            unit.GetComplex() && unit.GetId() != UINT16_MAX && unit.hits > 0 && unit.GetOrder() != ORDER_IDLE &&
+            unit.GetComplex() && unit.GetId() != UnitInfo::NO_ID && unit.hits > 0 && unit.GetOrder() != ORDER_IDLE &&
             unit.GetOrder() != ORDER_EXPLODE && unit.GetOrder() != ORDER_AWAIT_SCALING &&
             unit.GetOrderState() != ORDER_STATE_DESTROY) {
             units.emplace_back(unit);
@@ -2297,7 +2297,7 @@ void UnitsManager_ResolvePowerCaptures() {
             power_sources[network] = units[i];
         }
     }
-    std::vector<uint16_t> completed_units;
+    std::vector<uint32_t> completed_units;
     for (const auto& unit : units) {
         for (const auto& completed : completed_connections) {
             if (unit == completed) {

@@ -58,7 +58,7 @@ namespace PowerCapture {
 // derived by FindNetworks, rather than saved Complex record IDs. Ownership is
 // decided for the entire snapshot before any live connections change.
 struct Structure {
-    uint16_t id;
+    uint32_t id;
     uint16_t team;
     size_t network;
     int32_t x;
@@ -137,10 +137,10 @@ struct PlanResult {
     std::vector<size_t> power_networks;
 };
 
-inline PlanResult Plan(const std::vector<Structure>& structures, const std::vector<uint16_t>& completed_units) {
+inline PlanResult Plan(const std::vector<Structure>& structures, const std::vector<uint32_t>& completed_units) {
     struct Network {
         uint16_t team{};
-        uint16_t first_id{UINT16_MAX};
+        uint32_t first_id{UINT32_MAX};
         bool protected_from_capture{};
         bool powered{};
         std::vector<size_t> contacts;
