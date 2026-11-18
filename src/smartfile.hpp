@@ -35,8 +35,12 @@
 enum class SmartFileFormat : uint16_t {
     UNSPECIFIED = 0,
     V70 = 70,
+    /// V71 as written before upstream's defect 295 and AI target team changes (2026-10-27/11-03): 16-bit unit ids,
+    /// a per team object counter, no unit id counter, the AI's target team
     V71 = 71,
-    LATEST = 71,
+    /// V71's layout after those changes: 32-bit unit ids, the unit id counter, no AI target team
+    V72 = 72,
+    LATEST = 72,
     UNSUPPORTED = 0xFFFF,
 };
 

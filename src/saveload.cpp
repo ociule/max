@@ -238,7 +238,8 @@ bool SaveLoad_GetSaveFileInfoV71(SmartFileReader& file, struct SaveFileInfo& sav
     try {
         file.Read(version);
 
-        if (version != static_cast<uint32_t>(SmartFileFormat::V71)) {
+        if (version != static_cast<uint32_t>(SmartFileFormat::V71) &&
+            version != static_cast<uint32_t>(SmartFileFormat::V72)) {
             throw std::runtime_error(std::format("Invalid version: {}", version));
         }
 
@@ -327,7 +328,8 @@ bool SaveLoad_GetSaveFileInfo(const std::filesystem::path& filepath, struct Save
                 result = SaveLoad_GetSaveFileInfoV70(file, save_file_info, load_options);
             } break;
 
-            case SmartFileFormat::V71: {
+            case SmartFileFormat::V71:
+            case SmartFileFormat::V72: {
                 result = SaveLoad_GetSaveFileInfoV71(file, save_file_info, load_options);
             } break;
 
@@ -356,7 +358,8 @@ bool SaveLoad_GetSaveFileInfo(const std::filesystem::path& filepath, struct Save
             result = true;
         } break;
 
-        case static_cast<uint32_t>(SmartFileFormat::V71): {
+        case static_cast<uint32_t>(SmartFileFormat::V71):
+        case static_cast<uint32_t>(SmartFileFormat::V72): {
             result = true;
         } break;
 
@@ -1086,7 +1089,11 @@ bool SaveLoad_LoadFormatV71(SmartFileReader& file, const MissionCategory mission
 
     file.Read(version);
 
-    SDL_assert(version == static_cast<uint32_t>(SmartFileFormat::V71));
+    SDL_assert(version == static_cast<uint32_t>(SmartFileFormat::V71) ||
+               version == static_cast<uint32_t>(SmartFileFormat::V72));
+
+    // V71 saves were written before 32-bit unit ids: 16-bit ids, a per team object counter, no unit id counter
+    const bool is_v71 = file.GetFormat() == SmartFileFormat::V71;
 
     file.Read(save_file_category);
     file.Read(binary_script);
@@ -1200,10 +1207,27 @@ bool SaveLoad_LoadFormatV71(SmartFileReader& file, const MissionCategory mission
         file.Read(team_info->team_clan);
         file.Read(team_info->research_topics);
         file.Read(team_info->team_points);
+
+        if (is_v71) {
+            uint16_t number_of_objects_created_v71;
+
+            file.Read(number_of_objects_created_v71);
+        }
+
         file.Read(team_info->unit_counters);
         file.Read(team_info->screen_locations);
         file.Read(team_info->score_graph, sizeof(team_info->score_graph));
-        file.Read(selected_unit_ids[team]);
+
+        if (is_v71) {
+            uint16_t selected_unit_id_v71;
+
+            file.Read(selected_unit_id_v71);
+
+            selected_unit_ids[team] = (selected_unit_id_v71 == 0xFFFF) ? UnitInfo::NO_ID : selected_unit_id_v71;
+
+        } else {
+            file.Read(selected_unit_ids[team]);
+        }
         file.Read(team_info->zoom_level);
         file.Read(team_info->camera_position.x);
         file.Read(team_info->camera_position.y);
@@ -1226,7 +1250,11 @@ bool SaveLoad_LoadFormatV71(SmartFileReader& file, const MissionCategory mission
         file.Read(team_info->stats_gold_spent_on_upgrades);
     }
 
-    {
+    if (is_v71) {
+        // V71 ids hold the team from bit 13 on, as V70 ones do: new ids start above all of them
+        UnitsManager_UnitIdCounter = PLAYER_TEAM_MAX << 13;
+
+    } else {
         uint32_t unit_id_counter;
 
         file.Read(unit_id_counter);
@@ -1674,7 +1702,8 @@ bool SaveLoad_Load(const std::filesystem::path& filepath, const MissionCategory 
                 result = SaveLoad_LoadFormatV70(file, mission_category, is_remote_game, ini_load_mode);
             } break;
 
-            case SmartFileFormat::V71: {
+            case SmartFileFormat::V71:
+            case SmartFileFormat::V72: {
                 result = SaveLoad_LoadFormatV71(file, mission_category, is_remote_game, ini_load_mode);
             } break;
 

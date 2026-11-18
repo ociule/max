@@ -44,6 +44,10 @@ void SmartFileReader::SetFormat(const uint16_t format) noexcept {
             m_format = static_cast<uint16_t>(SmartFileFormat::V71);
         } break;
 
+        case static_cast<uint16_t>(SmartFileFormat::V72): {
+            m_format = static_cast<uint16_t>(SmartFileFormat::V72);
+        } break;
+
         default: {
             m_format = static_cast<uint16_t>(SmartFileFormat::UNSUPPORTED);
         } break;
@@ -268,6 +272,10 @@ SmartFileFormat SmartFileWriter::GetFormat() noexcept { return static_cast<Smart
 
         case static_cast<uint16_t>(SmartFileFormat::V71): {
             m_format = static_cast<uint16_t>(SmartFileFormat::V71);
+        } break;
+
+        case static_cast<uint16_t>(SmartFileFormat::V72): {
+            m_format = static_cast<uint16_t>(SmartFileFormat::V72);
         } break;
 
         default: {

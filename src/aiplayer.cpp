@@ -4139,7 +4139,7 @@ void AiPlayer::FileLoad(SmartFileReader& file) {
     file.Read(greenhouse_ratio);
     file.Read(minefield_density);
 
-    if (file.GetFormat() == SmartFileFormat::V70) {
+    if (file.GetFormat() == SmartFileFormat::V70 || file.GetFormat() == SmartFileFormat::V71) {
         int16_t target_team;
         file.Read(target_team);
     }

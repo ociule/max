@@ -2315,7 +2315,7 @@ void UnitInfo::DetachComplex() {
 void UnitInfo::FileLoad(SmartFileReader& file) noexcept {
     file.Read(unit_type);
 
-    if (file.GetFormat() == SmartFileFormat::V70) {
+    if (file.GetFormat() == SmartFileFormat::V70 || file.GetFormat() == SmartFileFormat::V71) {
         uint16_t id_v70;
 
         file.Read(id_v70);
