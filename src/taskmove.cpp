@@ -21,6 +21,7 @@
 
 #include "taskmove.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 
@@ -33,6 +34,7 @@
 #include "builder.hpp"
 #include "game_manager.hpp"
 #include "hash.hpp"
+#include "order_log.hpp"
 #include "resource_manager.hpp"
 #include "task_manager.hpp"
 #include "taskfindpath.hpp"
@@ -217,8 +219,9 @@ bool TaskMove::Execute(UnitInfo& unit) {
     bool result;
 
     if (passenger == &unit) {
-        AILOG(log, "Move finished for {} at [{},{}].",
-              ResourceManager_GetUnit(unit.GetUnitType()).GetSingularName().data(), unit.grid_x + 1, unit.grid_y + 1);
+        AILOG(log, "Move finished for {} id {} at [{},{}].",
+              ResourceManager_GetUnit(unit.GetUnitType()).GetSingularName().data(), unit.GetId(), unit.grid_x + 1,
+              unit.grid_y + 1);
 
         if (unit.IsReadyForOrders(this)) {
             if (UnitsManager_TeamInfo[passenger->team].team_type == TEAM_TYPE_COMPUTER) {
@@ -422,12 +425,18 @@ void TaskMove::FindWaypointUsingTransport() {
     bool keep_searching = true;
     Point site = passenger_destination;
     Rect bounds;
+    const std::vector<Point> claimed_sites = GetClaimedSites(&*passenger);
 
     rect_init(&bounds, 0, 0, ResourceManager_MapSize.x, ResourceManager_MapSize.y);
 
     if (Access_IsAccessible(passenger->GetUnitType(), m_team, site.x, site.y, AccessModifier_SameClassBlocks) &&
-        !Ai_IsDangerousLocation(&*passenger, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, true)) {
+        !Ai_IsDangerousLocation(&*passenger, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE) &&
+        std::find(claimed_sites.begin(), claimed_sites.end(), site) == claimed_sites.end()) {
         destination_waypoint = passenger_destination;
+
+        AILOG(log, "Drop off site for {} id {} is the transporter's cell [{},{}].",
+              ResourceManager_GetUnit(passenger->GetUnitType()).GetSingularName().data(), passenger->GetId(),
+              site.x + 1, site.y + 1);
 
         return;
     }
@@ -446,9 +455,14 @@ void TaskMove::FindWaypointUsingTransport() {
 
                     if (Access_IsAccessible(passenger->GetUnitType(), m_team, site.x, site.y,
                                             AccessModifier_EnemySameClassBlocks) &&
-                        !Ai_IsDangerousLocation(&*passenger, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, true)) {
+                        !Ai_IsDangerousLocation(&*passenger, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE) &&
+                        std::find(claimed_sites.begin(), claimed_sites.end(), site) == claimed_sites.end()) {
                         passenger_destination = site;
                         destination_waypoint = site;
+
+                        AILOG(log, "Drop off site for {} id {} is [{},{}].",
+                              ResourceManager_GetUnit(passenger->GetUnitType()).GetSingularName().data(),
+                              passenger->GetId(), site.x + 1, site.y + 1);
 
                         return;
                     }
@@ -931,7 +945,7 @@ bool TaskMove::CheckAirPath() {
         result = true;
 
     } else {
-        int16_t** damage_potential_map = AiPlayer_Teams[m_team].GetDamagePotentialMap(&*passenger, caution_level, true);
+        int16_t** damage_potential_map = AiPlayer_Teams[m_team].GetDamagePotentialMap(&*passenger, caution_level);
 
         if (damage_potential_map) {
             int32_t line_distance_x = passenger_waypoint.x - passenger->grid_x;
@@ -1003,17 +1017,26 @@ void TaskMove::MoveAirUnit() {
                         // the end node must be cached in case Hash_MapHash.Remove() deletes the list
                         for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
                             if ((*it).flags & MOBILE_AIR_UNIT) {
-                                AILOG_LOG(log, "Blocked by {} at [{},{}]",
+                                AILOG_LOG(log,
+                                          "Blocked by {} id {} at [{},{}], order {}/{}, speed {}, destination [{},{}], "
+                                          "task '{}'",
                                           ResourceManager_GetUnit((*it).GetUnitType()).GetSingularName().data(),
-                                          (*it).grid_x + 1, (*it).grid_y + 1);
+                                          (*it).GetId(), (*it).grid_x + 1, (*it).grid_y + 1,
+                                          OrderLog_GetOrderName((*it).GetOrder()),
+                                          OrderLog_GetStateName((*it).GetOrderState()), (*it).speed,
+                                          (*it).move_to_grid_x + 1, (*it).move_to_grid_y + 1,
+                                          (*it).GetTask() ? (*it).GetTask()->WriteStatusLog() : std::string("none"));
 
                                 if ((*it).GetOrder() == ORDER_MOVE &&
                                     (*it).GetOrderState() != ORDER_STATE_EXECUTING_ORDER) {
                                     AILOG_LOG(log, "Blocker is moving.");
 
-                                    class RemindTurnEnd* reminder = new (std::nothrow) class RemindTurnEnd(*this);
+                                    // the blocker moves only after the reminders, so check again in the next call
+                                    if (!IsScheduledForTurnEnd()) {
+                                        class RemindTurnEnd* reminder = new (std::nothrow) class RemindTurnEnd(*this);
 
-                                    TaskManager.AppendReminder(reminder);
+                                        TaskManager.AppendDeferredReminder(reminder);
+                                    }
 
                                     return;
 
@@ -1050,10 +1073,10 @@ void TaskMove::MoveAirUnit() {
                         if ((*it).GetOrder() == ORDER_MOVE && (*it).GetOrderState() != ORDER_STATE_EXECUTING_ORDER &&
                             (*it).team == m_team && (*it).move_to_grid_x == passenger_waypoint.x &&
                             (*it).move_to_grid_y == passenger_waypoint.y) {
-                            AILOG_LOG(log, "[{},{}] is a destination for {} at [{},{}].", passenger_waypoint.x + 1,
-                                      passenger_waypoint.y + 1,
+                            AILOG_LOG(log, "[{},{}] is a destination for {} id {} at [{},{}].",
+                                      passenger_waypoint.x + 1, passenger_waypoint.y + 1,
                                       ResourceManager_GetUnit((*it).GetUnitType()).GetSingularName().data(),
-                                      (*it).grid_x + 1, (*it).grid_y + 1);
+                                      (*it).GetId(), (*it).grid_x + 1, (*it).grid_y + 1);
 
                             if (step_index) {
                                 flag = false;
@@ -1160,7 +1183,7 @@ void TaskMove::FindCurrentLocation() {
         minimum_distance = Access_GetApproximateDistance(position, *planned_path[0]) / 2;
 
         if (caution_level > CAUTION_LEVEL_NONE) {
-            damage_potential_map = AiPlayer_Teams[m_team].GetDamagePotentialMap(&*passenger, caution_level, true);
+            damage_potential_map = AiPlayer_Teams[m_team].GetDamagePotentialMap(&*passenger, caution_level);
         }
 
         unit_hits = passenger->hits;
@@ -1238,7 +1261,7 @@ bool TaskMove::FindWaypoint() {
         int16_t** damage_potential_map = nullptr;
 
         if (caution_level > CAUTION_LEVEL_NONE) {
-            damage_potential_map = AiPlayer_Teams[m_team].GetDamagePotentialMap(&*passenger, caution_level, true);
+            damage_potential_map = AiPlayer_Teams[m_team].GetDamagePotentialMap(&*passenger, caution_level);
         }
 
         if (damage_potential_map && damage_potential_map[passenger_waypoint.x][passenger_waypoint.y] >= unit_hits) {
@@ -1345,6 +1368,32 @@ UnitInfo* TaskMove::FindUnit(SmartList<UnitInfo>* units, uint16_t team, Resource
     }
 
     return nullptr;
+}
+
+std::vector<Point> TaskMove::GetClaimedSites(UnitInfo* unit) {
+    std::vector<Point> sites;
+
+    for (auto it = TaskManager.GetTaskList().Begin(), it_end = TaskManager.GetTaskList().End(); it != it_end; ++it) {
+        if ((*it).GetTeam() == unit->team && (*it).GetType() == TaskType_TaskMove) {
+            TaskMove* move = dynamic_cast<TaskMove*>(it->Get());
+
+            if (move->passenger && move->passenger != unit &&
+                (move->passenger->flags & MOBILE_AIR_UNIT) == (unit->flags & MOBILE_AIR_UNIT)) {
+                if (move->minimum_distance == 0 && move->destination_waypoint.x >= 0 &&
+                    move->destination_waypoint.y >= 0) {
+                    sites.push_back(move->destination_waypoint);
+                }
+
+                // a carried unit also stands where its transporter unloads it
+                if (move->passenger_destination != move->destination_waypoint && move->passenger_destination.x >= 0 &&
+                    move->passenger_destination.y >= 0) {
+                    sites.push_back(move->passenger_destination);
+                }
+            }
+        }
+    }
+
+    return sites;
 }
 
 void TaskMove::FindTransport(ResourceID unit_type) {

@@ -71,10 +71,8 @@ bool Access_SetUnitDestination(int32_t grid_x, int32_t grid_y, int32_t target_gr
                     continue;
                 }
 
-                if (((*it).GetOrder() == ORDER_MOVE || (*it).GetOrder() == ORDER_MOVE_TO_UNIT ||
-                     (*it).GetOrder() == ORDER_MOVE_TO_ATTACK) &&
-                    (*it).GetOrderState() != ORDER_STATE_EXECUTING_ORDER && (*it).path != nullptr &&
-                    (*it).grid_x == target_grid_x && (*it).grid_y == target_grid_y &&
+                if ((*it).HasMoveOrder() && (*it).GetOrderState() != ORDER_STATE_EXECUTING_ORDER &&
+                    (*it).path != nullptr && (*it).grid_x == target_grid_x && (*it).grid_y == target_grid_y &&
                     !(*it).path->IsInPath(grid_x - target_grid_x, grid_y - target_grid_y)) {
                     return true;
 
@@ -1185,9 +1183,7 @@ void Access_RenewAttackOrders(SmartList<UnitInfo>& units, uint16_t team) {
             }
 
         } else {
-            if (((*it).GetOrder() == ORDER_MOVE || (*it).GetOrder() == ORDER_MOVE_TO_UNIT ||
-                 (*it).GetOrder() == ORDER_MOVE_TO_ATTACK) &&
-                (*it).GetOrderState() == ORDER_STATE_EXECUTING_ORDER) {
+            if ((*it).HasMoveOrder() && (*it).GetOrderState() == ORDER_STATE_EXECUTING_ORDER) {
                 if ((*it).team == team && (*it).speed > 0 && (*it).engine == 2) {
                     UnitsManager_SetNewOrder(it->Get(), (*it).GetOrder(), ORDER_STATE_INIT);
                 }
@@ -1568,7 +1564,8 @@ UnitInfo* Access_GetUnit2(int32_t grid_x, int32_t grid_y, uint16_t team) {
             // the end node must be cached in case Hash_MapHash.Remove() deletes the list
             for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
                 if ((*it).team == team && ((*it).flags & SELECTABLE) && !((*it).flags & (HOVERING | GROUND_COVER)) &&
-                    (*it).GetUnitType() != LANDPAD && (*it).GetOrder() != ORDER_IDLE && (*it).GetId() != 0xFFFF) {
+                    (*it).GetUnitType() != LANDPAD && (*it).GetOrder() != ORDER_IDLE &&
+                    (*it).GetId() != UnitInfo::NO_ID) {
                     unit = it->Get();
                     break;
                 }
@@ -1655,7 +1652,8 @@ void Access_DestroyGroundCovers(UnitInfo* unit) {
         if (units) {
             // the end node must be cached in case Hash_MapHash.Remove() deletes the list
             for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-                if (unit != it->Get()) {
+                // an exploding ground cover is cleared by its own explosion
+                if (unit != it->Get() && (*it).GetOrderState() != ORDER_STATE_DESTROY) {
                     switch ((*it).GetUnitType()) {
                         case ROAD:
                         case LANDPAD:
@@ -1670,7 +1668,8 @@ void Access_DestroyGroundCovers(UnitInfo* unit) {
     }
 }
 
-void Access_ValidateUnitsOnTerrain(int32_t grid_x, int32_t grid_y, const UnitInfo* destroyed_unit) {
+void Access_FindUnitsOnInvalidTerrain(int32_t grid_x, int32_t grid_y, const UnitInfo* destroyed_unit,
+                                      SmartList<UnitInfo>* stranded_units) {
     const auto units = Hash_MapHash[Point(grid_x, grid_y)];
 
     if (units) {
@@ -1709,9 +1708,9 @@ void Access_ValidateUnitsOnTerrain(int32_t grid_x, int32_t grid_y, const UnitInf
                 continue;
             }
 
-            // Landed aircraft require a landing pad - destroy if no landing pad present
+            // Landed aircraft require a landing pad - stranded if no landing pad present
             if ((unit->flags & MOBILE_AIR_UNIT) && !(unit->flags & HOVERING) && !has_landing_pad) {
-                UnitsManager_DestroyUnit(unit, true);
+                stranded_units->PushBack(*unit);
                 continue;
             }
 
@@ -1723,7 +1722,7 @@ void Access_ValidateUnitsOnTerrain(int32_t grid_x, int32_t grid_y, const UnitInf
 
             // Check if unit's land type is compatible with surface type
             if (!(unit_land_type & surface_type)) {
-                UnitsManager_DestroyUnit(unit, true);
+                stranded_units->PushBack(*unit);
             }
         }
     }
@@ -1812,8 +1811,8 @@ UnitInfo* Access_GetTeamUnit(int32_t grid_x, int32_t grid_y, uint16_t team, uint
             // the end node must be cached in case Hash_MapHash.Remove() deletes the list
             for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
                 if ((*it).team == team && ((*it).flags & flags) && (*it).GetOrder() != ORDER_IDLE &&
-                    (*it).GetId() != 0xFFFF && (*it).GetUnitType() != LRGTAPE && (*it).GetUnitType() != SMLTAPE &&
-                    !((*it).flags & GROUND_COVER)) {
+                    (*it).GetId() != UnitInfo::NO_ID && (*it).GetUnitType() != LRGTAPE &&
+                    (*it).GetUnitType() != SMLTAPE && !((*it).flags & GROUND_COVER)) {
                     unit = *it;
                     break;
                 }
@@ -1823,7 +1822,7 @@ UnitInfo* Access_GetTeamUnit(int32_t grid_x, int32_t grid_y, uint16_t team, uint
                 // the end node must be cached in case Hash_MapHash.Remove() deletes the list
                 for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
                     if ((*it).team == team && ((*it).flags & flags) && (*it).GetOrder() != ORDER_IDLE &&
-                        (*it).GetId() != 0xFFFF) {
+                        (*it).GetId() != UnitInfo::NO_ID) {
                         unit = *it;
                         break;
                     }
@@ -2069,7 +2068,7 @@ void Access_TriggerEnemyMine(uint16_t team, int32_t grid_x, int32_t grid_y) {
     if (mine) {
         mine->SetOrder(ORDER_EXPLODE);
         mine->SetOrderState(ORDER_STATE_EXPLODE);
-        mine->visible_to_team[team] = true;
+        mine->SetVisibleToTeam(team, true);
 
         Ai_UnitSpotted(&*mine, team);
     }
@@ -2086,7 +2085,7 @@ UnitInfo* Access_GetAttackTarget2(UnitInfo* unit, int32_t grid_x, int32_t grid_y
         if (units) {
             // the end node must be cached in case Hash_MapHash.Remove() deletes the list
             for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-                if ((*it).team != unit->team && !(*it).IsVisibleToTeam(unit->team) &&
+                if ((*it).team != unit->team && !(*it).IsVisibleToTeam(unit->team) && (*it).GetOrder() != ORDER_IDLE &&
                     Access_IsValidAttackTarget(unit, it->Get())) {
                     result = it->Get();
                     break;
@@ -2114,7 +2113,7 @@ UnitInfo* Access_GetReceiverUnit(UnitInfo* unit, int32_t grid_x, int32_t grid_y)
         if (units) {
             // the end node must be cached in case Hash_MapHash.Remove() deletes the list
             for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-                if ((*it).team == team && (*it).GetOrder() != ORDER_IDLE) {
+                if ((*it).team == team && (*it).GetOrder() != ORDER_IDLE && Access_CanReceiveUnits(it->Get())) {
                     if (flags & MOBILE_LAND_UNIT) {
                         if (((*it).GetUnitType() == BARRACKS || (*it).GetUnitType() == CLNTRANS ||
                              (*it).GetUnitType() == SEATRANS) &&
@@ -2150,6 +2149,11 @@ UnitInfo* Access_GetReceiverUnit(UnitInfo* unit, int32_t grid_x, int32_t grid_y)
     return result;
 }
 
+bool Access_CanReceiveUnits(const UnitInfo* receiver) {
+    // a destroyed or exploding unit takes nothing in, what it holds is destroyed with it
+    return receiver->hits > 0 && receiver->GetOrderState() != ORDER_STATE_DESTROY;
+}
+
 UnitInfo* Access_GetTeamBuilding(uint16_t team, int32_t grid_x, int32_t grid_y) {
     UnitInfo* unit{nullptr};
 
@@ -2159,9 +2163,7 @@ UnitInfo* Access_GetTeamBuilding(uint16_t team, int32_t grid_x, int32_t grid_y) 
         if (units) {
             // the end node must be cached in case Hash_MapHash.Remove() deletes the list
             for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-                if ((*it).team == team && (*it).GetOrder() != ORDER_IDLE && (*it).GetId() != 0xFFFF &&
-                    (((*it).flags & (CONNECTOR_UNIT | STANDALONE)) ||
-                     (((*it).flags) & (GROUND_COVER | BUILDING)) == BUILDING)) {
+                if ((*it).team == team && (*it).GetOrder() != ORDER_IDLE && (*it).IsComplexMember()) {
                     unit = it->Get();
                     break;
                 }

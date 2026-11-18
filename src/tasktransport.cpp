@@ -21,6 +21,8 @@
 
 #include "tasktransport.hpp"
 
+#include <format>
+
 #include "access.hpp"
 #include "ailog.hpp"
 #include "aiplayer.hpp"
@@ -488,6 +490,9 @@ void TaskTransport::EndTurn() {
     }
 }
 
+// a transporter that arrives starts its work in AddUnit()
+bool TaskTransport::IsEndTurnNeeded() { return unit_transporter != nullptr; }
+
 bool TaskTransport::Execute(UnitInfo& unit) {
     bool result;
 
@@ -535,8 +540,9 @@ bool TaskTransport::Execute(UnitInfo& unit) {
 
                 if (Task_IsReadyToTakeOrders(&*passenger)) {
                     if (Access_GetApproximateDistance(&*unit_transporter, &*passenger) > distance) {
+                        // a passenger without a planned waypoint is met where it stands
                         if (unit_transporter->GetUnitType() == AIRTRANS ||
-                            unit_transporter->GetUnitType() == CLNTRANS) {
+                            unit_transporter->GetUnitType() == CLNTRANS || position.x < 0 || position.y < 0) {
                             position.x = passenger->grid_x;
                             position.y = passenger->grid_y;
                         }

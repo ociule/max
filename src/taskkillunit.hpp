@@ -22,6 +22,8 @@
 #ifndef TASKKILLUNIT_HPP
 #define TASKKILLUNIT_HPP
 
+#include <vector>
+
 #include "spottedunit.hpp"
 #include "task.hpp"
 #include "transportermap.hpp"
@@ -30,27 +32,45 @@
 class TaskAttack;
 
 class TaskKillUnit : public Task {
+    struct UnitDamage {
+        SmartPointer<UnitInfo> unit;
+        int32_t damage;
+    };
+
     uint16_t unit_requests;
     SmartPointer<SpottedUnit> spotted_unit;
     SmartList<UnitInfo> units;
+    // the damage each unit was expected to deal when it joined the task
+    std::vector<UnitDamage> unit_damages;
     uint16_t required_damage;
-    uint16_t projected_damage;
     uint16_t hits;
     SmartPointer<UnitInfo> managed_unit;
     WeightTable weight_table;
     bool seek_target;
+    // a square next to the target that is being cleared for an infiltrator
+    SmartPointer<Zone> zone;
+    // the turn from which the task recruits, a target added within reach of an attack keeps to the units on site
+    int32_t recruit_turn{0};
 
-    static int32_t GetProjectedDamage(UnitInfo* attacker, UnitInfo* target);
     static void MoveFinishedCallback(Task* task, UnitInfo* unit, char result);
 
     void FindVaildTypes();
+    void UpdateDemand();
+    bool IsUnitSuitable(UnitInfo& unit);
+    bool IsAttackShareLeft();
     bool GetNewUnits();
     UnitInfo* FindClosestCombatUnit(SmartList<UnitInfo>* units, UnitInfo* unit, int32_t* distance, TransporterMap* map);
     bool GiveOrdersToUnit(UnitInfo* unit);
+    bool SabotageTarget(UnitInfo* unit);
+    void ClearSiteToSabotage(UnitInfo* unit, UnitInfo* target);
 
 public:
     TaskKillUnit(TaskAttack* task_attack, SpottedUnit* spotted_unit, uint16_t priority);
     ~TaskKillUnit();
+
+    static int32_t GetProjectedDamage(UnitInfo* attacker, UnitInfo* target);
+
+    void HoldRecruitsThisTurn();
 
     bool IsUnitUsable(UnitInfo& unit);
     uint16_t GetPriority() const;
@@ -68,6 +88,7 @@ public:
     void RemoveUnit(UnitInfo& unit);
     void EventUnitDestroyed(UnitInfo& unit);
     void EventEnemyUnitSpotted(UnitInfo& unit);
+    void EventZoneCleared(Zone* zone, bool status);
 
     int32_t GetTotalProjectedDamage();
     bool MoveUnits();
@@ -75,7 +96,7 @@ public:
     UnitInfo* GetUnitSpotted() const;
     SmartList<UnitInfo>& GetUnits();
     uint16_t GetRequiredDamage() const;
-    uint16_t GetProjectedDamage() const;
+    int32_t GetProjectedDamage() const;
 };
 
 #endif /* TASKKILLUNIT_HPP */

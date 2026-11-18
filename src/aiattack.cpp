@@ -21,8 +21,12 @@
 
 #include "aiattack.hpp"
 
+#include <algorithm>
+#include <vector>
+
 #include "access.hpp"
 #include "ai.hpp"
+#include "ailog.hpp"
 #include "aiplayer.hpp"
 #include "game_manager.hpp"
 #include "randomizer.hpp"
@@ -103,7 +107,7 @@ bool AiAttack_ChooseSiteToSabotage(UnitInfo* unit1, UnitInfo* unit2, Point* site
     auto info_map = AiPlayer_Teams[unit1->team].GetInfoMap();
     Point position;
     bool result = false;
-    int16_t** damage_potential_map = AiPlayer_Teams[unit1->team].GetDamagePotentialMap(unit1, caution_level, true);
+    int16_t** damage_potential_map = AiPlayer_Teams[unit1->team].GetDamagePotentialMap(unit1, caution_level);
     int32_t distance;
     int32_t minimum_distance = INT16_MAX;
     int32_t damage_potential = 0;
@@ -193,7 +197,7 @@ bool AiAttack_ChooseSiteForAttacker(UnitInfo* unit, Point target, Point* site, i
 
     distance1 = distance1 * distance1;
 
-    damage_potential_map = AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level, true);
+    damage_potential_map = AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level);
 
     *projected_damage = INT16_MAX;
 
@@ -257,25 +261,31 @@ bool AiAttack_ChooseSiteForAttacker(UnitInfo* unit, Point target, Point* site, i
     return result;
 }
 
-bool AiAttack_IsWithinReach(UnitInfo* unit, uint16_t team, bool* relevant_teams) {
+int32_t AiAttack_GetReach(UnitInfo* unit) {
+    UnitValues* base_values = unit->GetBaseValues();
+    int32_t result = base_values->GetAttribute(ATTRIB_RANGE);
+
+    if (base_values->GetAttribute(ATTRIB_MOVE_AND_FIRE)) {
+        result += base_values->GetAttribute(ATTRIB_SPEED);
+    }
+
+    if (base_values->GetAttribute(ATTRIB_SCAN) > result) {
+        result = base_values->GetAttribute(ATTRIB_SCAN);
+    }
+
+    return result;
+}
+
+bool AiAttack_IsWithinReach(UnitInfo* unit, uint16_t team) {
     bool result;
     int32_t distance;
     Point line_distance;
 
-    distance = unit->GetBaseValues()->GetAttribute(ATTRIB_RANGE);
-
     if (unit->team == PLAYER_TEAM_ALIEN) {
         result = false;
 
-    } else if (relevant_teams[unit->team]) {
-        if (unit->GetBaseValues()->GetAttribute(ATTRIB_MOVE_AND_FIRE)) {
-            distance += unit->GetBaseValues()->GetAttribute(ATTRIB_SPEED);
-        }
-
-        if (unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN) > distance) {
-            distance = unit->GetBaseValues()->GetAttribute(ATTRIB_SCAN);
-        }
-
+    } else {
+        distance = AiAttack_GetReach(unit);
         distance = distance * distance;
 
         if (distance) {
@@ -296,9 +306,6 @@ bool AiAttack_IsWithinReach(UnitInfo* unit, uint16_t team, bool* relevant_teams)
         } else {
             result = false;
         }
-
-    } else {
-        result = false;
     }
 
     return result;
@@ -307,8 +314,10 @@ bool AiAttack_IsWithinReach(UnitInfo* unit, uint16_t team, bool* relevant_teams)
 bool AiAttack_IsValidSabotageTarget(UnitInfo* unit, UnitInfo* target) {
     bool result;
 
+    // as for a player, an infiltrator sabotages only what it could target, which leaves submarines out
     if (unit->GetUnitType() == COMMANDO && (target->flags & ELECTRONIC_UNIT) && !(target->flags & HOVERING) &&
-        (target->GetOrder() != ORDER_DISABLE || !(target->flags & STATIONARY))) {
+        (target->GetOrder() != ORDER_DISABLE || !(target->flags & STATIONARY)) &&
+        Access_IsValidAttackTarget(unit, target)) {
         result = true;
 
     } else {
@@ -387,22 +396,37 @@ bool AiAttack_ProcessAttack(UnitInfo* attacker, UnitInfo* target) {
 
             if (attacker->shots > 0 || attacker->GetUnitType() != COMMANDO) {
                 if (attacker->GetUnitType() == COMMANDO && attack_range == 1) {
-                    Ai_SetReactionState(AI_REACTION_STATE_ANIMATIONS_ACTIVE);
-
-                    attacker->SetParent(target);
-                    attacker->stealth_dice_roll = Randomizer_Generate(101);
+                    UnitOrderType order;
 
                     if (target->GetOrder() == ORDER_DISABLE ||
                         (!(target->flags & STATIONARY) &&
                          UnitsManager_GetStealthChancePercentage(attacker, target, ORDER_AWAIT_STEAL_UNIT) >=
                              ResourceManager_GetSettings()->GetNumericValue("max_percent"))) {
-                        UnitsManager_SetNewOrder(attacker, ORDER_AWAIT_STEAL_UNIT, ORDER_STATE_INIT);
+                        order = ORDER_AWAIT_STEAL_UNIT;
 
                     } else {
-                        UnitsManager_SetNewOrder(attacker, ORDER_AWAIT_DISABLE_UNIT, ORDER_STATE_INIT);
+                        order = ORDER_AWAIT_DISABLE_UNIT;
                     }
 
-                    result = true;
+                    // the action resolves by the same rule, an action it refuses would only be repeated
+                    if (order == ORDER_AWAIT_STEAL_UNIT &&
+                        !UnitsManager_IsValidStealthTarget(attacker, target, ORDER_AWAIT_STEAL_UNIT)) {
+                        order = ORDER_AWAIT_DISABLE_UNIT;
+                    }
+
+                    if (UnitsManager_IsValidStealthTarget(attacker, target, order)) {
+                        Ai_SetReactionState(AI_REACTION_STATE_ANIMATIONS_ACTIVE);
+
+                        attacker->SetParent(target);
+                        attacker->stealth_dice_roll = Randomizer_Generate(101);
+
+                        UnitsManager_SetNewOrder(attacker, order, ORDER_STATE_INIT);
+
+                        result = true;
+
+                    } else {
+                        result = false;
+                    }
 
                 } else {
                     if (attacker->shots > 0) {
@@ -460,9 +484,14 @@ bool AiAttack_FindAttackSupport(UnitInfo* unit, SmartList<UnitInfo>* units, uint
 
                     if (((*it).GetBaseValues()->GetAttribute(ATTRIB_MOVE_AND_FIRE) &&
                          ResourceManager_GetSettings()->GetNumericValue("opponent") >= OPPONENT_TYPE_AVERAGE) ||
-                        (AiPlayer_Teams[team].GetDamagePotential(it->Get(), position, caution_level, true) <
-                         (*it).hits)) {
-                        AiAttack_ProcessAttack(it->Get(), unit);
+                        (AiPlayer_Teams[team].GetDamagePotential(it->Get(), position, caution_level) < (*it).hits)) {
+                        if (!AiAttack_ProcessAttack(it->Get(), unit)) {
+                            AILOG(log, "Support by {} id {} at [{},{}] on {} id {} at [{},{}] was not ordered.",
+                                  ResourceManager_GetUnit((*it).GetUnitType()).GetSingularName().data(), (*it).GetId(),
+                                  (*it).grid_x + 1, (*it).grid_y + 1,
+                                  ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(), unit->GetId(),
+                                  unit->grid_x + 1, unit->grid_y + 1);
+                        }
 
                         result = true;
                     }
@@ -522,36 +551,6 @@ bool AiAttack_IsAttackProfitable(UnitInfo* friendly_unit, UnitInfo* enemy_unit, 
                                        is_desperation_attack);
 }
 
-void AiAttack_GetTargetTeams(uint16_t team, bool* teams) {
-    if (ResourceManager_GetSettings()->GetNumericValue("opponent") >= OPPONENT_TYPE_AVERAGE) {
-        int16_t target_team;
-
-        memset(teams, 0, PLAYER_TEAM_MAX * sizeof(bool));
-
-        teams[PLAYER_TEAM_ALIEN] = true;
-
-        target_team = AiPlayer_Teams[team].GetTargetTeam();
-
-        if (target_team >= PLAYER_TEAM_RED) {
-            teams[target_team] = true;
-        }
-
-        for (target_team = PLAYER_TEAM_RED; target_team < PLAYER_TEAM_MAX - 1; ++target_team) {
-            if (UnitsManager_TeamInfo[target_team].team_type == TEAM_TYPE_PLAYER ||
-                UnitsManager_TeamInfo[target_team].team_type == TEAM_TYPE_REMOTE) {
-                teams[target_team] = true;
-
-            } else if (UnitsManager_TeamInfo[target_team].team_type == TEAM_TYPE_COMPUTER &&
-                       AiPlayer_Teams[target_team].GetTargetTeam() == team) {
-                teams[target_team] = true;
-            }
-        }
-
-    } else {
-        memset(teams, 1, PLAYER_TEAM_MAX * sizeof(bool));
-    }
-}
-
 SpottedUnit* AiAttack_SelectTargetToAttack(UnitInfo* unit, int32_t range, int32_t scan, int32_t caution_level,
                                            bool mode) {
     SpottedUnit* spotted_unit = nullptr;
@@ -564,10 +563,7 @@ SpottedUnit* AiAttack_SelectTargetToAttack(UnitInfo* unit, int32_t range, int32_
     int32_t unit_range = base_values->GetAttribute(ATTRIB_RANGE);
     uint8_t surface_type = ResourceManager_GetUnit(unit->GetUnitType()).GetLandType();
     Point unit_position;
-    bool teams[PLAYER_TEAM_MAX];
     int32_t distance;
-
-    AiAttack_GetTargetTeams(unit_team, teams);
 
     unit_scan = std::min(unit_scan, unit_range);
     unit_scan = unit_scan * unit_scan;
@@ -581,9 +577,8 @@ SpottedUnit* AiAttack_SelectTargetToAttack(UnitInfo* unit, int32_t range, int32_
          it != it_end; ++it) {
         UnitInfo* target_unit = (*it).GetUnit();
 
-        if (teams[target_unit->team] && target_unit->GetOrder() != ORDER_IDLE &&
-            target_unit->GetOrderState() != ORDER_STATE_DESTROY && target_unit->hits > 0 &&
-            target_unit->GetOrder() != ORDER_EXPLODE) {
+        if (target_unit->GetOrder() != ORDER_IDLE && target_unit->GetOrderState() != ORDER_STATE_DESTROY &&
+            target_unit->hits > 0 && target_unit->GetOrder() != ORDER_EXPLODE) {
             unit_position = (*it).GetLastPosition();
             distance = Access_GetSquaredDistance(unit, unit_position);
 
@@ -650,7 +645,7 @@ SpottedUnit* AiAttack_SelectTargetToAttack(UnitInfo* unit, int32_t range, int32_
 
                                     if (caution_level > CAUTION_LEVEL_NONE && !damage_potential_map) {
                                         damage_potential_map =
-                                            AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level, true);
+                                            AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level);
                                     }
 
                                     if (damage_potential_map) {
@@ -753,6 +748,12 @@ bool AiAttack_EvaluateAttack(UnitInfo* unit, bool mode) {
                                 result = false;
 
                             } else if (target->AreTherePins()) {
+                                AILOG(log, "Attack by {} id {} at [{},{}] waits, {} id {} at [{},{}] has {} pins.",
+                                      ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(),
+                                      unit->GetId(), unit->grid_x + 1, unit->grid_y + 1,
+                                      ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(),
+                                      target->GetId(), target->grid_x + 1, target->grid_y + 1, target->pin_count);
+
                                 SmartPointer<Task> wait_to_attack_task(new (std::nothrow) TaskWaitToAttack(unit));
 
                                 TaskManager.AppendTask(*wait_to_attack_task);
@@ -773,8 +774,7 @@ bool AiAttack_EvaluateAttack(UnitInfo* unit, bool mode) {
                                          unit->GetBaseValues()->GetAttribute(ATTRIB_TURNS) ||
                                      unit->shots * UnitsManager_GetAttackDamage(unit, target, 0) < target->hits)) {
                                     int32_t damage_potential = AiPlayer_Teams[unit->team].GetDamagePotential(
-                                        unit, Point(unit->grid_x, unit->grid_y), CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE,
-                                        true);
+                                        unit, Point(unit->grid_x, unit->grid_y), CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
 
                                     if (damage_potential >= unit->hits) {
                                         if (AiAttack_FindAttackSupport(target, &UnitsManager_MobileAirUnits, unit->team,
@@ -782,6 +782,15 @@ bool AiAttack_EvaluateAttack(UnitInfo* unit, bool mode) {
                                             AiAttack_FindAttackSupport(target, &UnitsManager_MobileLandSeaUnits,
                                                                        unit->team,
                                                                        CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE)) {
+                                            AILOG(
+                                                log,
+                                                "Attack by {} id {} at [{},{}] on {} id {} at [{},{}] "
+                                                "waits for support.",
+                                                ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(),
+                                                unit->GetId(), unit->grid_x + 1, unit->grid_y + 1,
+                                                ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(),
+                                                target->GetId(), target->grid_x + 1, target->grid_y + 1);
+
                                             return true;
                                         }
 
@@ -800,7 +809,18 @@ bool AiAttack_EvaluateAttack(UnitInfo* unit, bool mode) {
                                     }
                                 }
 
-                                AiAttack_ProcessAttack(unit, target);
+                                if (!AiAttack_ProcessAttack(unit, target)) {
+                                    AILOG(log,
+                                          "Attack by {} id {} at [{},{}] on {} id {} at [{},{}] was not ordered, "
+                                          "range {}, target {} sight, last seen at [{},{}].",
+                                          ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(),
+                                          unit->GetId(), unit->grid_x + 1, unit->grid_y + 1,
+                                          ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(),
+                                          target->GetId(), target->grid_x + 1, target->grid_y + 1,
+                                          unit->GetBaseValues()->GetAttribute(ATTRIB_RANGE),
+                                          target->IsVisibleToTeam(unit->team) ? "in" : "out of",
+                                          spotted_unit->GetLastPositionX() + 1, spotted_unit->GetLastPositionY() + 1);
+                                }
 
                                 result = true;
                             }
@@ -930,7 +950,7 @@ bool AiAttack_EvaluateAssault(UnitInfo* unit, Task* task,
                                 caution_level = CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE;
 
                                 projected_damage = AiPlayer_Teams[unit_team].GetDamagePotential(
-                                    unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, true);
+                                    unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
                             }
 
                             attack_potential = AiAttack_GetAttackPotential(unit, target);
@@ -940,7 +960,7 @@ bool AiAttack_EvaluateAssault(UnitInfo* unit, Task* task,
 
                             } else {
                                 damage_potential = AiPlayer_Teams[unit_team].GetDamagePotential(
-                                    unit, site, CAUTION_LEVEL_AVOID_REACTION_FIRE, true);
+                                    unit, site, CAUTION_LEVEL_AVOID_REACTION_FIRE);
                             }
 
                             unit_shots = 0;
@@ -988,7 +1008,7 @@ bool AiAttack_EvaluateAssault(UnitInfo* unit, Task* task,
                                         caution_level = CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE;
 
                                         projected_damage = AiPlayer_Teams[unit_team].GetDamagePotential(
-                                            unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, true);
+                                            unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
 
                                         if (AiAttack_IsAttackProfitable(unit, target, projected_damage,
                                                                         CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, 0x00)) {
@@ -1147,6 +1167,7 @@ bool AiAttack_FollowAttacker(Task* task, UnitInfo* unit, uint16_t task_priority)
         auto info_map = AiPlayer_Teams[unit->team].GetInfoMap();
         Point unit_position(unit->grid_x, unit->grid_y);
         ResourceID transporter_type = INVALID_ID;
+        const std::vector<Point> claimed_sites = TaskMove::GetClaimedSites(unit);
 
         if (unit->flags & MOBILE_LAND_UNIT) {
             if (Task_GetReadyUnitsCount(unit->team, AIRTRANS) > 0) {
@@ -1159,7 +1180,7 @@ bool AiAttack_FollowAttacker(Task* task, UnitInfo* unit, uint16_t task_priority)
 
         TransporterMap map(unit, 0x02, CAUTION_LEVEL_NONE, transporter_type);
         int16_t** damage_potential_map =
-            AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, true);
+            AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
         int32_t range = Access_GetApproximateDistance(&*leader, unit) / 2;
 
         target_location = unit_position;
@@ -1184,7 +1205,9 @@ bool AiAttack_FollowAttacker(Task* task, UnitInfo* unit, uint16_t task_priority)
                                                                     INFO_MAP_CLEAR_OUT_ZONE))) {
                                 if (map.Search(unit_position) &&
                                     Access_IsAccessible(unit->GetUnitType(), unit->team, unit_position.x,
-                                                        unit_position.y, AccessModifier_SameClassBlocks)) {
+                                                        unit_position.y, AccessModifier_SameClassBlocks) &&
+                                    std::find(claimed_sites.begin(), claimed_sites.end(), unit_position) ==
+                                        claimed_sites.end()) {
                                     target_location = unit_position;
                                     range = distance;
                                 }
@@ -1292,4 +1315,12 @@ uint32_t AiAttack_GetTargetWorth(UnitInfo* attacker, UnitInfo* target) {
     }
 
     return result;
+}
+
+/* Eco-spheres and mining stations of a team that is ahead of \p team in score are priority targets. Destroying an
+ * eco-sphere takes the points it stored from its team's score, and the score leader is ahead of every other team.
+ */
+bool AiAttack_IsPriorityTarget(UnitInfo* target, uint16_t team) {
+    return (target->GetUnitType() == GREENHSE || target->GetUnitType() == MININGST) &&
+           UnitsManager_TeamInfo[target->team].team_points > UnitsManager_TeamInfo[team].team_points;
 }

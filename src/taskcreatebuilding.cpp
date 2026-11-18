@@ -205,8 +205,7 @@ void TaskCreateBuilding::BeginBuilding() {
                         if (!RequestWaterPlatform()) {
                             if (!RequestMineRemoval()) {
                                 if (!RequestRubbleRemoval()) {
-                                    if (!Ai_IsDangerousLocation(&*builder, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE,
-                                                                false)) {
+                                    if (!Ai_IsDangerousLocation(&*builder, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE)) {
                                         if (CheckMaterials()) {
                                             if (GameManager_IsActiveTurn(m_team)) {
                                                 build_list.Clear();
@@ -322,13 +321,24 @@ void TaskCreateBuilding::Finish() {
     // prevent early destruction of object
     SmartPointer<Task> create_building_task(this);
 
+    if (building && building->hits == 0) {
+        // a building that died before it was handed over never hands itself to the task
+        Abort();
+
+        return;
+    }
+
     if (building && building->GetOrder() != ORDER_IDLE && building->GetOrder() != ORDER_AWAIT_SCALING) {
         AddUnit(*building);
     }
 
     if (builder) {
         if (building) {
-            Activate();
+            // the builder needs an activation as long as it stands on the site; once it is off the site the task
+            // waits for the building, whose expansion hands it to the task
+            if (!TaskActivate_IsComplete(&*builder, &*building)) {
+                Activate();
+            }
 
             return;
         }
@@ -662,7 +672,7 @@ void TaskCreateBuilding::EndTurn() {
 
                     } else if (builder->GetOrder() == ORDER_BUILD &&
                                builder->GetOrderState() == ORDER_STATE_BUILD_IN_PROGRESS &&
-                               Ai_IsDangerousLocation(&*builder, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, false)) {
+                               Ai_IsDangerousLocation(&*builder, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE)) {
                         AbandonSite();
                     }
                 }
@@ -683,6 +693,12 @@ void TaskCreateBuilding::EndTurn() {
                op_state < CREATE_BUILDING_STATE_BUILDING && !tasks.GetCount()) {
         RequestBuilder();
     }
+}
+
+// without a builder the end turn only asks for one, unless it is already getting one
+bool TaskCreateBuilding::IsEndTurnNeeded() {
+    return builder || (unit_type != INVALID_ID && op_state != CREATE_BUILDING_STATE_GETTING_BUILDER &&
+                       op_state < CREATE_BUILDING_STATE_BUILDING && !tasks.GetCount());
 }
 
 bool TaskCreateBuilding::ExchangeOperator(UnitInfo& unit_) {
@@ -1229,7 +1245,7 @@ void TaskCreateBuilding::MarkBridgeAreas(AccessMap& map) {
         }
     }
 
-    damage_potential_map = AiPlayer_Teams[m_team].GetDamagePotentialMap(ENGINEER, CAUTION_LEVEL_AVOID_ALL_DAMAGE, true);
+    damage_potential_map = AiPlayer_Teams[m_team].GetDamagePotentialMap(ENGINEER, CAUTION_LEVEL_AVOID_ALL_DAMAGE);
 
     for (int32_t x = 0; x < ResourceManager_MapSize.x; ++x) {
         for (int32_t y = 0; y < ResourceManager_MapSize.y; ++y) {

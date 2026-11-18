@@ -191,7 +191,7 @@ bool Task_ShouldReserveShot(UnitInfo* unit, Point site) {
             AILOG(log, "Determine if {} should reserve a shot at [{},{}].",
                   ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(), site.x + 1, site.y + 1);
 
-            if (Ai_IsDangerousLocation(unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, true)) {
+            if (Ai_IsDangerousLocation(unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE)) {
                 for (auto it = AiPlayer_Teams[unit->team].GetSpottedUnits().Begin(),
                           it_end = AiPlayer_Teams[unit->team].GetSpottedUnits().End();
                      it != it_end; ++it) {
@@ -275,11 +275,11 @@ bool Task_IsUnitDoomedToDestruction(UnitInfo* unit, int32_t caution_level) {
             unit_hits = 1;
         }
 
-        if (ai_player->GetDamagePotential(unit, position, caution_level, true) < unit_hits) {
+        if (ai_player->GetDamagePotential(unit, position, caution_level) < unit_hits) {
             result = false;
 
         } else if (unit->speed > 0) {
-            int16_t** damage_potential_map = ai_player->GetDamagePotentialMap(unit, caution_level, true);
+            int16_t** damage_potential_map = ai_player->GetDamagePotentialMap(unit, caution_level);
 
             if (damage_potential_map) {
                 ZoneWalker walker(position, unit->speed);
@@ -320,6 +320,31 @@ bool Task_IsAdjacent(UnitInfo* unit, int16_t grid_x, int16_t grid_y) {
 
     return unit->grid_x - 1 <= grid_x && unit->grid_x + unit_size >= grid_x && unit->grid_y - 1 <= grid_y &&
            unit->grid_y + unit_size >= grid_y;
+}
+
+bool Task_IsRepairDue(UnitInfo* unit, bool is_lead_unit) {
+    const int32_t base_hits = unit->GetBaseValues()->GetAttribute(ATTRIB_HITS);
+
+    return unit->hits < base_hits / 4 || (is_lead_unit && unit->hits < base_hits / 2);
+}
+
+bool Task_IsRecruitable(UnitInfo* unit, uint16_t team, uint16_t task_priority) {
+    // the one test by which attacks take units: the unit takes new orders, and its current task, if any, ranks
+    // below the recruiting task and agrees to give the unit away
+    bool result;
+
+    if (unit->team == team && unit->hits > 0 &&
+        (unit->GetOrder() == ORDER_AWAIT || unit->GetOrder() == ORDER_SENTRY || unit->GetOrder() == ORDER_MOVE ||
+         unit->GetOrder() == ORDER_MOVE_TO_UNIT)) {
+        Task* task = unit->GetTask();
+
+        result = !task || (task->ComparePriority(task_priority) > 0 && task->IsUnitTransferable(*unit));
+
+    } else {
+        result = false;
+    }
+
+    return result;
 }
 
 int32_t Task_EstimateTurnsTillMissionEnd() {
@@ -463,7 +488,7 @@ bool Task_RetreatIfNecessary(Task* task, UnitInfo* unit, int32_t caution_level) 
             unit_hits = 1;
         }
 
-        if (AiPlayer_Teams[unit->team].GetDamagePotential(unit, position, caution_level, false) >= unit_hits) {
+        if (AiPlayer_Teams[unit->team].GetDamagePotential(unit, position, caution_level) >= unit_hits) {
             if (unit->GetBaseValues()->GetAttribute(ATTRIB_ROUNDS) > 0 &&
                 (unit->shots > 0 || !unit->GetBaseValues()->GetAttribute(ATTRIB_MOVE_AND_FIRE) ||
                  ResourceManager_GetSettings()->GetNumericValue("opponent") < OPPONENT_TYPE_AVERAGE) &&
@@ -608,6 +633,8 @@ void Task::BeginTurn() { EndTurn(); }
 void Task::ChildComplete(Task* task) {}
 
 void Task::EndTurn() {}
+
+bool Task::IsEndTurnNeeded() { return true; }
 
 bool Task::ExchangeOperator(UnitInfo& unit) { return false; }
 

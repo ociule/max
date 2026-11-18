@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -40,6 +41,7 @@
 #include "game_manager.hpp"
 #include "hash.hpp"
 #include "message_manager.hpp"
+#include "order_log.hpp"
 #include "paths_manager.hpp"
 #include "powercapture.hpp"
 #include "production_manager.hpp"
@@ -53,6 +55,7 @@
 #include "smartlist.hpp"
 #include "sound_manager.hpp"
 #include "survey.hpp"
+#include "task.hpp"
 #include "teamunits.hpp"
 #include "unitevents.hpp"
 #include "unitinfo.hpp"
@@ -122,7 +125,7 @@ static void UnitsManager_Popup_InitInfiltrator(UnitInfo* unit, struct PopupButto
 static bool UnitsManager_Popup_IsNever(UnitInfo* unit);
 static bool UnitsManager_Popup_IsReady(UnitInfo* unit);
 
-static void UnitsManager_ClearPins(SmartList<UnitInfo>* units);
+static void UnitsManager_PinAttackTargets(UnitInfo* unit);
 static void UnitsManager_ProcessOrder(UnitInfo* unit);
 static void UnitsManager_ProcessUnitOrders(SmartList<UnitInfo>* units);
 static void UnitsManager_FinishUnitScaling(UnitInfo* unit);
@@ -142,6 +145,7 @@ static void UnitsManager_ActivateUnit(UnitInfo* unit);
 static void UnitsManager_StartExplosion(UnitInfo* unit);
 static void UnitsManager_ProgressExplosion(UnitInfo* unit);
 static void UnitsManager_ProgressUnloading(UnitInfo* unit);
+static bool UnitsManager_IsUnloadSiteTaken(UnitInfo* unit);
 static void UnitsManager_StartClearing(UnitInfo* unit);
 static void UnitsManager_ProgressLoading(UnitInfo* unit);
 static void UnitsManager_BuildingReady(UnitInfo* unit);
@@ -195,6 +199,10 @@ SmartList<UnitInfo> UnitsManager_StationaryUnits;
 SmartList<UnitInfo> UnitsManager_MobileAirUnits;
 SmartList<UnitInfo> UnitsManager_PendingAttacks;
 
+// the live attacks by number, each with the units it pinned; the attacker holds the number, a missile from its launch
+static std::unordered_map<uint32_t, SmartList<UnitInfo>> UnitsManager_LiveAttacks;
+static uint32_t UnitsManager_LiveAttackCounter;
+
 SmartPointer<UnitInfo> UnitsManager_PendingAirGroupLeader;
 
 SmartPointer<UnitInfo> UnitsManager_Units[PLAYER_TEAM_MAX];
@@ -204,6 +212,9 @@ SmartList<UnitInfo> UnitsManager_DelayedAttackTargets[PLAYER_TEAM_MAX];
 bool UnitsManager_DelayedReactionsPending;
 uint16_t UnitsManager_DelayedReactionsTeam;
 uint32_t UnitsManager_DelayedReactionsSyncCounter;
+
+// the last unit id handed out, ids are never reused within a game
+uint32_t UnitsManager_UnitIdCounter;
 
 bool UnitsManager_OrdersPending;
 bool UnitsManager_CombatEffectsActive;
@@ -1266,6 +1277,9 @@ void UnitsManager_InitPopupMenus() {
 
     UnitsManager_PendingAttacks.Clear();
 
+    UnitsManager_LiveAttacks.clear();
+    UnitsManager_LiveAttackCounter = 0;
+
     UnitsManager_DelayedReactionsTeam = PLAYER_TEAM_RED;
 
     UnitsManager_DelayedReactionsSyncCounter = 0;
@@ -1362,6 +1376,64 @@ int32_t UnitsManager_GetStealthChancePercentage(UnitInfo* unit1, UnitInfo* unit2
     }
 
     return chance;
+}
+
+bool UnitsManager_IsValidStealthTarget(UnitInfo* unit, UnitInfo* target, int32_t order) {
+    // the one rule for the target of an infiltrator: the cursor offers the action by it and the action resolves by
+    // it, so a target that moved away, boarded, started firing or transforming, or died meanwhile escapes; only what
+    // the infiltrator could target qualifies, as the cursor finds its targets that way, which leaves submarines out
+    const auto target_order = target->GetOrder();
+    bool result;
+
+    if (target->team == unit->team || target->hits == 0 || !(target->flags & ELECTRONIC_UNIT) ||
+        ((target->flags & MOBILE_AIR_UNIT) && (target->flags & HOVERING)) || target_order == ORDER_IDLE ||
+        (target_order == ORDER_AWAIT_SCALING && target->GetPriorOrder() == ORDER_IDLE) ||
+        target_order == ORDER_TRANSFORM || target_order == ORDER_FIRE || target_order == ORDER_EXPLODE ||
+        target->GetOrderState() == ORDER_STATE_DESTROY || !Task_IsAdjacent(target, unit->grid_x, unit->grid_y) ||
+        !Access_IsValidAttackTarget(unit, target)) {
+        result = false;
+
+    } else if (order == ORDER_AWAIT_STEAL_UNIT) {
+        result = !(target->flags & STATIONARY) &&
+                 !((target->GetUnitType() == CLNTRANS || target->GetUnitType() == SEATRANS ||
+                    target->GetUnitType() == AIRTRANS) &&
+                   target->storage);
+
+    } else {
+        result = target_order != ORDER_DISABLE;
+    }
+
+    return result;
+}
+
+static bool UnitsManager_IsStealthActionInProgress(UnitInfo* unit) {
+    const auto order = unit->GetOrder();
+    const auto prior_order = unit->GetPriorOrder();
+
+    return unit->hits > 0 && unit->GetOrderState() != ORDER_STATE_DESTROY &&
+           (order == ORDER_AWAIT_STEAL_UNIT || order == ORDER_AWAIT_DISABLE_UNIT ||
+            (order == ORDER_AWAIT_SCALING &&
+             (prior_order == ORDER_AWAIT_STEAL_UNIT || prior_order == ORDER_AWAIT_DISABLE_UNIT)));
+}
+
+static bool UnitsManager_IsEngagedByInfiltrator(UnitInfo* unit) {
+    // the infiltrator holds its target from the order to the resolution; derived from the infiltrator's own order
+    // and parent, so the hold cannot leak, survives saving and ends with the sequence or the infiltrator
+    for (auto it = UnitsManager_MobileLandSeaUnits.Begin(), it_end = UnitsManager_MobileLandSeaUnits.End();
+         it != it_end; ++it) {
+        if ((*it).GetUnitType() == COMMANDO && (*it).GetParent() == unit &&
+            UnitsManager_IsStealthActionInProgress(it->Get())) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool UnitsManager_IsEngaged(UnitInfo* unit) {
+    // the one test of every primitive that takes a unit off its cell or off the map: an attack pins its target and
+    // an infiltrator holds its target, and both have to find the unit where it was
+    return unit->AreTherePins() || UnitsManager_IsEngagedByInfiltrator(unit);
 }
 
 SmartPointer<UnitInfo> UnitsManager_SpawnUnit(ResourceID unit_type, uint16_t team, int32_t grid_x, int32_t grid_y,
@@ -1500,7 +1572,7 @@ void UnitsManager_RemoveConnections(UnitInfo* unit) {
 
     unit->RefreshScreen();
 
-    if ((unit->flags & (CONNECTOR_UNIT | BUILDING | STANDALONE)) && !(unit->flags & GROUND_COVER)) {
+    if (unit->IsComplexMember()) {
         int32_t unit_size;
         int32_t grid_x;
         int32_t grid_y;
@@ -1784,6 +1856,8 @@ int32_t UnitsManager_GetFiringAngle(int32_t distance_x, int32_t distance_y) {
 }
 
 void UnitsManager_ScaleUnit(UnitInfo* unit, const UnitOrderStateType state) {
+    ORDER_LOG_ISSUER();
+
     if (GameManager_PlayerTeam == unit->team) {
         ResourceManager_GetSoundManager().PlaySfx(
             unit, state == ORDER_STATE_EXPAND ? Unit::SFX_TYPE_EXPAND : Unit::SFX_TYPE_SHRINK);
@@ -1795,6 +1869,8 @@ void UnitsManager_ScaleUnit(UnitInfo* unit, const UnitOrderStateType state) {
 }
 
 void UnitsManager_ProcessOrders() {
+    ORDER_LOG_TICK();
+
     UnitsManager_BobEffectQuota = 5;
 
     Ai_ClearTasksPendingFlags();
@@ -1820,21 +1896,29 @@ void UnitsManager_ProcessOrders() {
         if (UnitsManager_PendingAttacks.GetCount() > 0) {
             auto unit_it = UnitsManager_PendingAttacks.Begin();
 
-            SDL_assert((*unit_it).hits > 0);
+            if ((*unit_it).hits == 0 || (*unit_it).GetOrderState() == ORDER_STATE_DESTROY) {
+                // the attacker is dying, UnitsManager_DestroyUnit() ends its attack
+                UnitsManager_PendingAttacks.Remove(unit_it);
 
-            if ((*unit_it).shots > 0) {
-                if ((*unit_it).GetOrder() == ORDER_FIRE) {
-                    (*unit_it).SetOrderState(ORDER_STATE_ATTACK_BEGINNING);
+            } else if ((*unit_it).GetOrder() != ORDER_FIRE) {
+                // a hit animation only suspends the fire order, any other order abandons the attack
+                if ((*unit_it).GetOrder() != ORDER_EXPLODE || (*unit_it).GetPriorOrder() != ORDER_FIRE) {
+                    UnitsManager_EndAttack(unit_it->Get());
 
                     UnitsManager_PendingAttacks.Remove(unit_it);
                 }
+
+            } else if ((*unit_it).shots > 0) {
+                (*unit_it).SetOrderState(ORDER_STATE_ATTACK_BEGINNING);
+
+                UnitsManager_PendingAttacks.Remove(unit_it);
 
             } else {
                 AILOG(log, "{} at [{},{}] cannot fire.",
                       ResourceManager_GetUnit((*unit_it).GetUnitType()).GetSingularName().data(), (*unit_it).grid_x + 1,
                       (*unit_it).grid_y + 1);
 
-                (*unit_it).UpdatePinCount((*unit_it).fire_on_grid_x, (*unit_it).fire_on_grid_y, -1);
+                UnitsManager_EndAttack(unit_it->Get());
                 (*unit_it).RestoreOrders();
 
                 if ((*unit_it).GetOrder() == ORDER_FIRE) {
@@ -1852,10 +1936,7 @@ void UnitsManager_ProcessOrders() {
             }
 
         } else {
-            if (!UnitsManager_AssessAttacks()) {
-                UnitsManager_ClearPins(&UnitsManager_MobileLandSeaUnits);
-                UnitsManager_ClearPins(&UnitsManager_MobileAirUnits);
-            }
+            UnitsManager_AssessAttacks();
         }
     }
 
@@ -1876,6 +1957,8 @@ void UnitsManager_ProcessOrders() {
 }
 
 void UnitsManager_SetNewOrderInt(UnitInfo* unit, const UnitOrderType order, const UnitOrderStateType state) {
+    ORDER_LOG_ISSUER();
+
     if (unit->GetOrder() != ORDER_EXPLODE && unit->GetOrderState() != ORDER_STATE_DESTROY) {
         bool delete_path = false;
 
@@ -1913,6 +1996,8 @@ void UnitsManager_SetNewOrderInt(UnitInfo* unit, const UnitOrderType order, cons
 }
 
 void UnitsManager_SetNewOrder(UnitInfo* unit, const UnitOrderType order, const UnitOrderStateType state) {
+    ORDER_LOG_ISSUER();
+
     UnitsManager_SetNewOrderInt(unit, order, state);
 
     if (Remote_IsNetworkGame) {
@@ -1981,178 +2066,176 @@ static void UnitsManager_UpdateConnectorsInt(UnitInfo* unit, bool count_construc
                                              Complex* primary_complex = nullptr) {
     unit->RefreshScreen();
 
-    if (unit->flags & (CONNECTOR_UNIT | BUILDING | STANDALONE)) {
-        if (!(unit->flags & GROUND_COVER)) {
-            SmartPointer<UnitInfo> building;
-            int32_t unit_size = (unit->flags & BUILDING) ? 2 : 1;
-            int32_t grid_x = unit->grid_x;
-            int32_t grid_y = unit->grid_y;
-            CTInfo* team_info = &UnitsManager_TeamInfo[unit->team];
+    if (unit->IsComplexMember()) {
+        SmartPointer<UnitInfo> building;
+        int32_t unit_size = (unit->flags & BUILDING) ? 2 : 1;
+        int32_t grid_x = unit->grid_x;
+        int32_t grid_y = unit->grid_y;
+        CTInfo* team_info = &UnitsManager_TeamInfo[unit->team];
 
-            if (count_construction && UnitsManager_IsFactory(unit->GetUnitType())) {
-                ++team_info->stats_factories_built;
-            }
-
-            if (count_construction && unit->GetUnitType() == MININGST) {
-                ++team_info->stats_mines_built;
-            }
-
-            if (count_construction && (unit->flags & BUILDING)) {
-                ++team_info->stats_buildings_built;
-            }
-
-            building = Access_GetTeamBuilding(unit->team, grid_x, grid_y - 1);
-
-            if (building) {
-                unit->connectors |= CONNECTOR_NORTH_LEFT;
-
-                if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
-                    building->connectors |= CONNECTOR_SOUTH_LEFT;
-
-                } else if (building == Access_GetTeamBuilding(unit->team, grid_x + 1, grid_y - 1)) {
-                    building->connectors |= CONNECTOR_SOUTH_LEFT;
-
-                } else {
-                    building->connectors |= CONNECTOR_SOUTH_RIGHT;
-                }
-
-                building->RefreshScreen();
-            }
-
-            building = Access_GetTeamBuilding(unit->team, grid_x, grid_y + unit_size);
-
-            if (building) {
-                unit->connectors |= CONNECTOR_SOUTH_LEFT;
-
-                if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
-                    building->connectors |= CONNECTOR_NORTH_LEFT;
-
-                } else if (building == Access_GetTeamBuilding(unit->team, grid_x + 1, grid_y + unit_size)) {
-                    building->connectors |= CONNECTOR_NORTH_LEFT;
-
-                } else {
-                    building->connectors |= CONNECTOR_NORTH_RIGHT;
-                }
-
-                building->RefreshScreen();
-            }
-
-            if (unit->flags & BUILDING) {
-                building = Access_GetTeamBuilding(unit->team, grid_x + 1, grid_y - 1);
-
-                if (building) {
-                    unit->connectors |= CONNECTOR_NORTH_RIGHT;
-
-                    if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
-                        building->connectors |= CONNECTOR_SOUTH_LEFT;
-
-                    } else if (building == Access_GetTeamBuilding(unit->team, grid_x, grid_y - 1)) {
-                        building->connectors |= CONNECTOR_SOUTH_RIGHT;
-
-                    } else {
-                        building->connectors |= CONNECTOR_SOUTH_LEFT;
-                    }
-
-                    building->RefreshScreen();
-                }
-
-                building = Access_GetTeamBuilding(unit->team, grid_x + 1, grid_y + unit_size);
-
-                if (building) {
-                    unit->connectors |= CONNECTOR_SOUTH_RIGHT;
-
-                    if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
-                        building->connectors |= CONNECTOR_NORTH_LEFT;
-
-                    } else if (building == Access_GetTeamBuilding(unit->team, grid_x, grid_y + unit_size)) {
-                        building->connectors |= CONNECTOR_NORTH_RIGHT;
-
-                    } else {
-                        building->connectors |= CONNECTOR_NORTH_LEFT;
-                    }
-
-                    building->RefreshScreen();
-                }
-            }
-
-            building = Access_GetTeamBuilding(unit->team, grid_x + unit_size, grid_y);
-
-            if (building) {
-                unit->connectors |= CONNECTOR_EAST_TOP;
-
-                if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
-                    building->connectors |= CONNECTOR_WEST_TOP;
-
-                } else if (building == Access_GetTeamBuilding(unit->team, grid_x + unit_size, grid_y + 1)) {
-                    building->connectors |= CONNECTOR_WEST_TOP;
-
-                } else {
-                    building->connectors |= CONNECTOR_WEST_BOTTOM;
-                }
-
-                building->RefreshScreen();
-            }
-
-            building = Access_GetTeamBuilding(unit->team, grid_x - 1, grid_y);
-
-            if (building) {
-                unit->connectors |= CONNECTOR_WEST_TOP;
-
-                if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
-                    building->connectors |= CONNECTOR_EAST_TOP;
-
-                } else if (building == Access_GetTeamBuilding(unit->team, grid_x - 1, grid_y + 1)) {
-                    building->connectors |= CONNECTOR_EAST_TOP;
-
-                } else {
-                    building->connectors |= CONNECTOR_EAST_BOTTOM;
-                }
-
-                building->RefreshScreen();
-            }
-
-            if (unit->flags & BUILDING) {
-                building = Access_GetTeamBuilding(unit->team, grid_x + unit_size, grid_y + 1);
-
-                if (building) {
-                    unit->connectors |= CONNECTOR_EAST_BOTTOM;
-
-                    if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
-                        building->connectors |= CONNECTOR_WEST_TOP;
-
-                    } else if (building == Access_GetTeamBuilding(unit->team, grid_x + unit_size, grid_y)) {
-                        building->connectors |= CONNECTOR_WEST_BOTTOM;
-
-                    } else {
-                        building->connectors |= CONNECTOR_WEST_TOP;
-                    }
-
-                    building->RefreshScreen();
-                }
-
-                building = Access_GetTeamBuilding(unit->team, grid_x - 1, grid_y + 1);
-
-                if (building) {
-                    unit->connectors |= CONNECTOR_WEST_BOTTOM;
-
-                    if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
-                        building->connectors |= CONNECTOR_EAST_TOP;
-
-                    } else if (building == Access_GetTeamBuilding(unit->team, grid_x - 1, grid_y)) {
-                        building->connectors |= CONNECTOR_EAST_BOTTOM;
-
-                    } else {
-                        building->connectors |= CONNECTOR_EAST_TOP;
-                    }
-
-                    building->RefreshScreen();
-                }
-            }
-
-            unit->AttachToPrimaryComplex(primary_complex);
-
-            Access_UpdateResourcesTotal(unit->GetComplex());
+        if (count_construction && UnitsManager_IsFactory(unit->GetUnitType())) {
+            ++team_info->stats_factories_built;
         }
+
+        if (count_construction && unit->GetUnitType() == MININGST) {
+            ++team_info->stats_mines_built;
+        }
+
+        if (count_construction && (unit->flags & BUILDING)) {
+            ++team_info->stats_buildings_built;
+        }
+
+        building = Access_GetTeamBuilding(unit->team, grid_x, grid_y - 1);
+
+        if (building) {
+            unit->connectors |= CONNECTOR_NORTH_LEFT;
+
+            if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
+                building->connectors |= CONNECTOR_SOUTH_LEFT;
+
+            } else if (building == Access_GetTeamBuilding(unit->team, grid_x + 1, grid_y - 1)) {
+                building->connectors |= CONNECTOR_SOUTH_LEFT;
+
+            } else {
+                building->connectors |= CONNECTOR_SOUTH_RIGHT;
+            }
+
+            building->RefreshScreen();
+        }
+
+        building = Access_GetTeamBuilding(unit->team, grid_x, grid_y + unit_size);
+
+        if (building) {
+            unit->connectors |= CONNECTOR_SOUTH_LEFT;
+
+            if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
+                building->connectors |= CONNECTOR_NORTH_LEFT;
+
+            } else if (building == Access_GetTeamBuilding(unit->team, grid_x + 1, grid_y + unit_size)) {
+                building->connectors |= CONNECTOR_NORTH_LEFT;
+
+            } else {
+                building->connectors |= CONNECTOR_NORTH_RIGHT;
+            }
+
+            building->RefreshScreen();
+        }
+
+        if (unit->flags & BUILDING) {
+            building = Access_GetTeamBuilding(unit->team, grid_x + 1, grid_y - 1);
+
+            if (building) {
+                unit->connectors |= CONNECTOR_NORTH_RIGHT;
+
+                if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
+                    building->connectors |= CONNECTOR_SOUTH_LEFT;
+
+                } else if (building == Access_GetTeamBuilding(unit->team, grid_x, grid_y - 1)) {
+                    building->connectors |= CONNECTOR_SOUTH_RIGHT;
+
+                } else {
+                    building->connectors |= CONNECTOR_SOUTH_LEFT;
+                }
+
+                building->RefreshScreen();
+            }
+
+            building = Access_GetTeamBuilding(unit->team, grid_x + 1, grid_y + unit_size);
+
+            if (building) {
+                unit->connectors |= CONNECTOR_SOUTH_RIGHT;
+
+                if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
+                    building->connectors |= CONNECTOR_NORTH_LEFT;
+
+                } else if (building == Access_GetTeamBuilding(unit->team, grid_x, grid_y + unit_size)) {
+                    building->connectors |= CONNECTOR_NORTH_RIGHT;
+
+                } else {
+                    building->connectors |= CONNECTOR_NORTH_LEFT;
+                }
+
+                building->RefreshScreen();
+            }
+        }
+
+        building = Access_GetTeamBuilding(unit->team, grid_x + unit_size, grid_y);
+
+        if (building) {
+            unit->connectors |= CONNECTOR_EAST_TOP;
+
+            if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
+                building->connectors |= CONNECTOR_WEST_TOP;
+
+            } else if (building == Access_GetTeamBuilding(unit->team, grid_x + unit_size, grid_y + 1)) {
+                building->connectors |= CONNECTOR_WEST_TOP;
+
+            } else {
+                building->connectors |= CONNECTOR_WEST_BOTTOM;
+            }
+
+            building->RefreshScreen();
+        }
+
+        building = Access_GetTeamBuilding(unit->team, grid_x - 1, grid_y);
+
+        if (building) {
+            unit->connectors |= CONNECTOR_WEST_TOP;
+
+            if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
+                building->connectors |= CONNECTOR_EAST_TOP;
+
+            } else if (building == Access_GetTeamBuilding(unit->team, grid_x - 1, grid_y + 1)) {
+                building->connectors |= CONNECTOR_EAST_TOP;
+
+            } else {
+                building->connectors |= CONNECTOR_EAST_BOTTOM;
+            }
+
+            building->RefreshScreen();
+        }
+
+        if (unit->flags & BUILDING) {
+            building = Access_GetTeamBuilding(unit->team, grid_x + unit_size, grid_y + 1);
+
+            if (building) {
+                unit->connectors |= CONNECTOR_EAST_BOTTOM;
+
+                if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
+                    building->connectors |= CONNECTOR_WEST_TOP;
+
+                } else if (building == Access_GetTeamBuilding(unit->team, grid_x + unit_size, grid_y)) {
+                    building->connectors |= CONNECTOR_WEST_BOTTOM;
+
+                } else {
+                    building->connectors |= CONNECTOR_WEST_TOP;
+                }
+
+                building->RefreshScreen();
+            }
+
+            building = Access_GetTeamBuilding(unit->team, grid_x - 1, grid_y + 1);
+
+            if (building) {
+                unit->connectors |= CONNECTOR_WEST_BOTTOM;
+
+                if (building->flags & (CONNECTOR_UNIT | STANDALONE)) {
+                    building->connectors |= CONNECTOR_EAST_TOP;
+
+                } else if (building == Access_GetTeamBuilding(unit->team, grid_x - 1, grid_y)) {
+                    building->connectors |= CONNECTOR_EAST_BOTTOM;
+
+                } else {
+                    building->connectors |= CONNECTOR_EAST_TOP;
+                }
+
+                building->RefreshScreen();
+            }
+        }
+
+        unit->AttachToPrimaryComplex(primary_complex);
+
+        Access_UpdateResourcesTotal(unit->GetComplex());
     }
 }
 
@@ -2302,7 +2385,7 @@ void UnitsManager_DestroyUnit(UnitInfo* unit, bool count_casualty) {
           unit->grid_x + 1, unit->grid_y + 1);
 
     // Count casualties for this unit and any units it's holding
-    if (count_casualty && unit->GetId() != 0xFFFF && !(unit->flags & (EXPLODING | MISSILE_UNIT)) &&
+    if (count_casualty && unit->GetId() != UnitInfo::NO_ID && !(unit->flags & (EXPLODING | MISSILE_UNIT)) &&
         (unit->flags & SELECTABLE)) {
         const ResourceID unit_type = unit->GetUnitType();
 
@@ -2357,9 +2440,14 @@ void UnitsManager_DestroyUnit(UnitInfo* unit, bool count_casualty) {
         }
     }
 
-    if (unit->GetPriorOrder() == ORDER_FIRE && unit->GetPriorOrderState() != ORDER_STATE_INIT) {
-        unit->UpdatePinCount(unit->fire_on_grid_x, unit->fire_on_grid_y, -1);
+    // the temporary tape of an open build site selection belongs to the selecting unit
+    if (GameManager_TempTape != nullptr && GameManager_TempTape->GetParent() == unit) {
+        UnitsManager_DestroyUnit(&*GameManager_TempTape);
+        GameManager_TempTape = nullptr;
     }
+
+    // an attacker that has not fired yet, or a missile that has not landed
+    UnitsManager_EndAttack(unit);
 
     if (GameManager_LockedUnits.Remove(*unit)) {
         GameManager_UpdateDrawBounds();
@@ -2382,13 +2470,13 @@ void UnitsManager_DestroyUnit(UnitInfo* unit, bool count_casualty) {
 
     UnitsManager_RemoveUnitFromUnitLists(unit);
 
-    if (unit->GetId() != 0xFFFF || (unit->flags & (EXPLODING | MISSILE_UNIT))) {
+    if (unit->GetId() != UnitInfo::NO_ID || (unit->flags & (EXPLODING | MISSILE_UNIT))) {
         Access_UpdateMapStatus(unit, false);
     }
 
     Hash_UnitHash.Remove(unit);
 
-    if (unit->GetId() != 0xFFFF && !(unit->flags & (EXPLODING | MISSILE_UNIT))) {
+    if (unit->GetId() != UnitInfo::NO_ID && !(unit->flags & (EXPLODING | MISSILE_UNIT))) {
         Ai_RemoveUnit(unit);
     }
 
@@ -2420,19 +2508,15 @@ void UnitsManager_RemoveUnitFromUnitLists(UnitInfo* unit) {
 SmartPointer<UnitInfo> UnitsManager_DeployUnit(ResourceID unit_type, uint16_t team, Complex* complex, int32_t grid_x,
                                                int32_t grid_y, uint8_t unit_angle, bool is_existing_unit,
                                                bool skip_map_status_update) {
-    uint16_t id;
+    uint32_t id;
     UnitInfo* unit;
 
-    id = 0xFFFF;
+    id = UnitInfo::NO_ID;
 
     if (!is_existing_unit) {
-        ++UnitsManager_TeamInfo[team].number_of_objects_created;
+        SDL_assert(UnitsManager_UnitIdCounter < UnitInfo::NO_ID - 1);
 
-        if (UnitsManager_TeamInfo[team].number_of_objects_created >= 0x1FFF) {
-            UnitsManager_TeamInfo[team].number_of_objects_created = 1;
-        }
-
-        id = UnitsManager_TeamInfo[team].number_of_objects_created + (team << 13);
+        id = ++UnitsManager_UnitIdCounter;
     }
 
     unit = new (std::nothrow) UnitInfo(unit_type, team, id, unit_angle);
@@ -2544,7 +2628,9 @@ void UnitsManager_FinishUnitScaling(UnitInfo* unit) {
     if (unit->GetOrder() == ORDER_IDLE) {
         SmartPointer<UnitInfo> parent = unit->GetParent();
 
-        if (parent->storage < parent->GetBaseValues()->GetAttribute(ATTRIB_STORAGE) && parent->team == unit->team) {
+        // a container destroyed during the shrink was cleared without the unit, which comes back out on its cell
+        if (Access_CanReceiveUnits(&*parent) &&
+            parent->storage < parent->GetBaseValues()->GetAttribute(ATTRIB_STORAGE) && parent->team == unit->team) {
             unit->SetOrder(ORDER_AWAIT);
 
             Access_UpdateMapStatus(unit, false);
@@ -2563,6 +2649,10 @@ void UnitsManager_FinishUnitScaling(UnitInfo* unit) {
             }
 
         } else {
+            if (!Access_CanReceiveUnits(&*parent)) {
+                unit->SetParent(nullptr);
+            }
+
             unit->SetOrder(ORDER_AWAIT);
             unit->SetOrderState(ORDER_STATE_EXECUTING_ORDER);
 
@@ -2603,9 +2693,45 @@ void UnitsManager_NewOrderWhileScaling(UnitInfo* unit) {
     }
 }
 
-void UnitsManager_ClearPins(SmartList<UnitInfo>* units) {
-    for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-        (*it).ClearPins();
+void UnitsManager_PinAttackTargets(UnitInfo* unit) {
+    // a unit holds one attack at a time
+    UnitsManager_EndAttack(unit);
+
+    unit->live_attack = ++UnitsManager_LiveAttackCounter;
+
+    SmartList<UnitInfo>& pinned_units = UnitsManager_LiveAttacks[unit->live_attack];
+
+    if (unit->GetBaseValues()->GetAttribute(ATTRIB_ATTACK_RADIUS)) {
+        for (const auto& target : unit->GetAreaAttackTargets(unit->fire_on_grid_x, unit->fire_on_grid_y)) {
+            pinned_units.PushBack(*target.unit);
+        }
+
+    } else {
+        UnitInfo* target = Access_GetAttackTarget(unit, unit->fire_on_grid_x, unit->fire_on_grid_y);
+
+        if (target) {
+            pinned_units.PushBack(*target);
+        }
+    }
+
+    for (auto it = pinned_units.Begin(), it_end = pinned_units.End(); it != it_end; ++it) {
+        ++(*it).pin_count;
+    }
+}
+
+void UnitsManager_EndAttack(UnitInfo* unit) {
+    if (unit->live_attack) {
+        auto attack = UnitsManager_LiveAttacks.find(unit->live_attack);
+
+        if (attack != UnitsManager_LiveAttacks.end()) {
+            for (auto it = attack->second.Begin(), it_end = attack->second.End(); it != it_end; ++it) {
+                --(*it).pin_count;
+            }
+
+            UnitsManager_LiveAttacks.erase(attack);
+        }
+
+        unit->live_attack = 0;
     }
 }
 
@@ -2763,8 +2889,10 @@ void UnitsManager_ProcessOrderMove(UnitInfo* unit) {
 
             } else {
                 if (!unit->IsBridgeElevated()) {
-                    UnitsManager_GroundCoverUnits.Remove(*unit);
-                    unit->AddToDrawList(STATIONARY | UPGRADABLE | SELECTABLE);
+                    // a bridge raised again before its lowering finished is still in the stationary list
+                    if (UnitsManager_GroundCoverUnits.Remove(*unit)) {
+                        unit->AddToDrawList(STATIONARY | UPGRADABLE | SELECTABLE);
+                    }
                 }
 
                 unit->DrawSpriteFrame(unit->GetImageIndex() + 1);
@@ -2780,8 +2908,10 @@ void UnitsManager_ProcessOrderMove(UnitInfo* unit) {
                     unit->DrawSpriteFrame(unit->GetImageIndex() - 1);
 
                 } else {
-                    UnitsManager_StationaryUnits.Remove(*unit);
-                    unit->AddToDrawList();
+                    if (UnitsManager_StationaryUnits.Remove(*unit)) {
+                        unit->AddToDrawList();
+                    }
+
                     UnitsManager_SetNewOrderInt(unit, ORDER_AWAIT, ORDER_STATE_EXECUTING_ORDER);
                 }
             }
@@ -2811,7 +2941,7 @@ void UnitsManager_ProcessOrderFire(UnitInfo* unit) {
         case ORDER_STATE_INIT: {
             UnitsManager_PendingAttacks.PushBack(*unit);
 
-            unit->UpdatePinCount(unit->fire_on_grid_x, unit->fire_on_grid_y, 1);
+            UnitsManager_PinAttackTargets(unit);
 
             unit->SetOrderState(ORDER_STATE_ATTACK_PENDING);
         } break;
@@ -3023,14 +3153,11 @@ void UnitsManager_ProcessOrderUnload(UnitInfo* unit) {
             unit->moved = 0;
             unit->SetOrderState(ORDER_STATE_UNLOADING_IN_PROGRESS);
 
-            const Point site{unit->grid_x, unit->grid_y};
-
-            if (Paths_IsSiteReserved(site) || Paths_IsOccupied(unit->grid_x, unit->grid_y, 0, unit->team)) {
+            if (UnitsManager_IsUnloadSiteTaken(unit) || Paths_IsOccupied(unit->grid_x, unit->grid_y, 0, unit->team)) {
                 unit->SetOrder(ORDER_AWAIT);
                 unit->SetOrderState(ORDER_STATE_EXECUTING_ORDER);
 
             } else {
-                Paths_ReserveSite(site);
                 UnitsManager_ProgressUnloading(unit);
             }
         } break;
@@ -3069,6 +3196,11 @@ void UnitsManager_ProcessOrderSentry(UnitInfo* unit) {
 
 void UnitsManager_ProcessOrderLand(UnitInfo* unit) {
     Ai_SetTasksPendingFlag("Landing");
+
+    // an engaged aircraft holds its descent into a hangar, a landing pad keeps it on the map
+    if (unit->GetParent() && UnitsManager_IsEngaged(unit)) {
+        return;
+    }
 
     switch (unit->GetOrderState()) {
         case ORDER_STATE_INIT: {
@@ -3116,12 +3248,15 @@ void UnitsManager_ProcessOrderLoad(UnitInfo* unit) {
 
     switch (unit->GetOrderState()) {
         case ORDER_STATE_INIT: {
-            unit->moved = 0;
-            unit->SetOrderState(ORDER_STATE_LOADING_IN_PROGRESS);
+            // an engaged passenger is not picked up until the attack or stealth action is over
+            if (!UnitsManager_IsEngaged(unit->GetParent())) {
+                unit->moved = 0;
+                unit->SetOrderState(ORDER_STATE_LOADING_IN_PROGRESS);
 
-            UnitsManager_ScaleUnit(unit->GetParent(), ORDER_STATE_SHRINK);
+                UnitsManager_ScaleUnit(unit->GetParent(), ORDER_STATE_SHRINK);
 
-            UnitsManager_ProgressLoading(unit);
+                UnitsManager_ProgressLoading(unit);
+            }
         } break;
 
         case ORDER_STATE_LOADING_IN_PROGRESS: {
@@ -3274,6 +3409,11 @@ void UnitsManager_ProcessOrderLayMine(UnitInfo* unit) {
 }
 
 void UnitsManager_ProcessOrder(UnitInfo* unit) {
+    if (unit->shake_effect_state && !UnitsManager_IsEngagedByInfiltrator(unit)) {
+        // the infiltrator that shook the unit died or left its stealth action before the shake cycle ended
+        unit->FinishShakeSabotage();
+    }
+
     if ((unit->flags & SPINNING_TURRET) && unit->GetOrder() != ORDER_DISABLE &&
         ResourceManager_GetSettings()->GetNumericValue("effects")) {
         unit->SpinningTurretAdvanceAnimation();
@@ -3448,7 +3588,13 @@ bool UnitsManager_IsFactory(ResourceID unit_type) {
 
 void UnitsManager_AddToDelayedReactionList(UnitInfo* unit) {
     if (!ResourceManager_GetSettings()->GetNumericValue("disable_fire")) {
-        UnitsManager_DelayedAttackTargets[unit->team].PushBack(*unit);
+        auto& targets = UnitsManager_DelayedAttackTargets[unit->team];
+
+        // a unit is listed once so that removing it when it dies or changes team takes it out
+        if (targets.Find(*unit) == targets.End()) {
+            targets.PushBack(*unit);
+        }
+
         UnitsManager_DelayedReactionsPending = true;
     }
 }
@@ -3696,17 +3842,19 @@ void UnitsManager_BuildClearing(UnitInfo* unit, bool mode) {
         }
     }
 
+    SmartList<UnitInfo> stranded_units;
+
     if ((unit_flags & (MOBILE_AIR_UNIT | MOBILE_LAND_UNIT | STATIONARY)) && !(unit->flags & HOVERING)) {
         Access_DestroyGroundCovers(unit);
 
         if (unit->flags & BUILDING) {
-            Access_ValidateUnitsOnTerrain(unit_grid_x, unit_grid_y, unit);
-            Access_ValidateUnitsOnTerrain(unit_grid_x + 1, unit_grid_y, unit);
-            Access_ValidateUnitsOnTerrain(unit_grid_x, unit_grid_y + 1, unit);
-            Access_ValidateUnitsOnTerrain(unit_grid_x + 1, unit_grid_y + 1, unit);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x, unit_grid_y, unit, &stranded_units);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x + 1, unit_grid_y, unit, &stranded_units);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x, unit_grid_y + 1, unit, &stranded_units);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x + 1, unit_grid_y + 1, unit, &stranded_units);
 
         } else {
-            Access_ValidateUnitsOnTerrain(unit_grid_x, unit_grid_y, unit);
+            Access_FindUnitsOnInvalidTerrain(unit_grid_x, unit_grid_y, unit, &stranded_units);
         }
     }
 
@@ -3794,6 +3942,19 @@ void UnitsManager_BuildClearing(UnitInfo* unit, bool mode) {
         rubble_unit->storage = cargo_amount;
     }
 
+    // stranded units are cleared once this unit is gone, a unit in transit may be listed twice
+    for (auto it = stranded_units.Begin(), it_end = stranded_units.End(); it != it_end; ++it) {
+        if ((*it).hits > 0) {
+            if ((*it).GetUnitType() == LANDMINE || (*it).GetUnitType() == SEAMINE) {
+                // a sunken mine does not detonate
+                UnitsManager_DestroyUnit(it->Get(), true);
+
+            } else {
+                UnitsManager_BuildClearing(it->Get(), true);
+            }
+        }
+    }
+
     GameManager_RenderMinimapDisplay = true;
 }
 
@@ -3821,9 +3982,12 @@ void UnitsManager_ActivateUnit(UnitInfo* unit) {
 
     SDL_assert(client.Get());
 
+    // the square was open when it was chosen, another unit may have taken it since
     if (((client->flags & MOBILE_AIR_UNIT) && client->speed > 0) ||
         (!Paths_IsOccupied(unit->move_to_grid_x, unit->move_to_grid_y, 0, unit->team) &&
-         !(client->flags & MOBILE_AIR_UNIT))) {
+         !(client->flags & MOBILE_AIR_UNIT) &&
+         Access_IsAccessible(client->GetUnitType(), unit->team, unit->move_to_grid_x, unit->move_to_grid_y,
+                             AccessModifier_SameClassBlocks))) {
         SDL_assert(unit->storage > 0);
 
         --unit->storage;
@@ -4055,14 +4219,30 @@ void UnitsManager_ProgressUnloading(UnitInfo* unit) {
 
         unit->SetOrderState(ORDER_STATE_FINISH_UNLOADING);
 
-        const Point site{client->grid_x, client->grid_y};
-
-        Paths_RemoveSiteReservation(site);
-
         if (GameManager_SelectedUnit == unit) {
             GameManager_UpdateInfoDisplay(unit);
         }
     }
+}
+
+bool UnitsManager_IsUnloadSiteTaken(UnitInfo* unit) {
+    // the unit lowered by another air transport occupies the site only once it is placed
+    for (auto it = UnitsManager_MobileAirUnits.Begin(), it_end = UnitsManager_MobileAirUnits.End(); it != it_end;
+         ++it) {
+        if (it->Get() != unit && (*it).hits > 0 && (*it).grid_x == unit->grid_x && (*it).grid_y == unit->grid_y) {
+            // a disable or a hit animation only suspends the unloading
+            const bool is_suspended =
+                ((*it).GetOrder() == ORDER_DISABLE || (*it).GetOrder() == ORDER_EXPLODE) &&
+                (*it).GetPriorOrder() == ORDER_UNLOAD && (*it).GetPriorOrderState() == ORDER_STATE_UNLOADING_IN_PROGRESS;
+
+            if (((*it).GetOrder() == ORDER_UNLOAD && (*it).GetOrderState() == ORDER_STATE_UNLOADING_IN_PROGRESS) ||
+                is_suspended) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 void UnitsManager_StartClearing(UnitInfo* unit) {
@@ -4103,6 +4283,11 @@ void UnitsManager_StartClearing(UnitInfo* unit) {
 }
 
 void UnitsManager_ProgressLoading(UnitInfo* unit) {
+    // a passenger engaged during the descent stays on the map, the transporter holds until it is free
+    if (UnitsManager_IsEngaged(unit->GetParent())) {
+        return;
+    }
+
     if (unit->Land()) {
         UnitValues* base_values = unit->GetBaseValues();
         SmartPointer<UnitInfo> parent(unit->GetParent());
@@ -4166,6 +4351,13 @@ void UnitsManager_BuildingReady(UnitInfo* unit) {
                 unit->GetBounds(&bounds);
 
                 is_found = !Access_IsInsideBounds(&bounds, &position);
+
+                // a builder whose way off a 2x2 site failed waits on one of its squares, where the building blocks
+                // every square around it but the five next to the builder, so it goes back to the middle first
+                if (!is_found && (unit->flags & BUILDING) && parent->GetOrder() == ORDER_AWAIT &&
+                    parent->GetOrderState() == ORDER_STATE_EXECUTING_ORDER) {
+                    parent->ReturnToConstructionSite(unit);
+                }
             }
 
         } else {
@@ -4218,7 +4410,7 @@ bool UnitsManager_AttemptStealthAction(UnitInfo* unit) {
     int32_t stealth_chance = UnitsManager_GetStealthChancePercentage(unit, &*parent, unit->GetOrder());
     bool result;
 
-    if (unit->team == parent->team) {
+    if (!UnitsManager_IsValidStealthTarget(unit, &*parent, unit->GetOrder())) {
         result = false;
 
     } else {
@@ -4394,12 +4586,10 @@ void UnitsManager_DisableUnit(UnitInfo* unit) {
         ResourceManager_GetSoundManager().PlayVoice(V_M244, V_F244);
     }
 
-    switch (parent->GetOrder()) {
-        case ORDER_MOVE: {
-            parent->MoveFinished(false);
-            parent->SetOrderState(ORDER_STATE_EXECUTING_ORDER);
-        } break;
+    // the disable drops the path, so a move under way stops here
+    parent->StopMove();
 
+    switch (parent->GetOrder()) {
         case ORDER_BUILD:
         case ORDER_CLEAR: {
             if (parent->GetOrderState() == ORDER_STATE_SELECT_SITE) {
@@ -4595,9 +4785,7 @@ bool UnitsManager_ShouldAttack(UnitInfo* unit1, UnitInfo* unit2) {
         if (unit1->GetOrder() == ORDER_IDLE) {
             result = false;
 
-        } else if ((unit1->GetOrder() == ORDER_MOVE || unit1->GetOrder() == ORDER_MOVE_TO_UNIT ||
-                    unit1->GetOrder() == ORDER_MOVE_TO_ATTACK) &&
-                   unit1->GetOrderState() != ORDER_STATE_EXECUTING_ORDER) {
+        } else if (unit1->HasMoveOrder() && unit1->GetOrderState() != ORDER_STATE_EXECUTING_ORDER) {
             result = false;
 
         } else if (unit1->GetOrder() == ORDER_DISABLE) {
@@ -4612,7 +4800,8 @@ bool UnitsManager_ShouldAttack(UnitInfo* unit1, UnitInfo* unit2) {
                 result = false;
 
             } else if (UnitsManager_TeamInfo[unit1->team].team_type == TEAM_TYPE_COMPUTER) {
-                result = Ai_IsTargetTeam(unit1, unit2);
+                // computer players treat every other team as hostile
+                result = true;
 
             } else {
                 if (GameManager_PlayMode == PLAY_MODE_TURN_BASED || unit1->GetOrder() == ORDER_SENTRY) {

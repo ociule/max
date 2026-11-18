@@ -262,7 +262,7 @@ void TaskManageBuildings::ClearBuildingAreas(uint16_t** construction_map, TaskCr
     AILOG(log, "Clear building areas.");
 
     int16_t** damage_potential_map =
-        AiPlayer_Teams[m_team].GetDamagePotentialMap(ENGINEER, CAUTION_LEVEL_AVOID_ALL_DAMAGE, true);
+        AiPlayer_Teams[m_team].GetDamagePotentialMap(ENGINEER, CAUTION_LEVEL_AVOID_ALL_DAMAGE);
 
     if (damage_potential_map) {
         for (int32_t x = 0; x < ResourceManager_MapSize.x; ++x) {
@@ -1485,7 +1485,7 @@ void TaskManageBuildings::ClearAreasNearBuildings(AccessMap& access_map, int32_t
 
 void TaskManageBuildings::EvaluateDangers(AccessMap& access_map) {
     int16_t** damage_potential_map =
-        AiPlayer_Teams[m_team].GetDamagePotentialMap(ENGINEER, CAUTION_LEVEL_AVOID_ALL_DAMAGE, true);
+        AiPlayer_Teams[m_team].GetDamagePotentialMap(ENGINEER, CAUTION_LEVEL_AVOID_ALL_DAMAGE);
 
     if (damage_potential_map) {
         for (int32_t x = 0; x < ResourceManager_MapSize.x; ++x) {
@@ -2062,6 +2062,7 @@ bool TaskManageBuildings::ConnectBuilding(AccessMap& access_map, Point site, int
 
 bool TaskManageBuildings::ReconnectBuilding(AccessMap& access_map, Rect* bounds, int32_t value) {
     Point site;
+    Rect map_bounds;
 
     if (value == MARKER_CONSTRUCTION_SQUARE) {
         if (access_map(bounds->ulx, bounds->uly) != MARKER_CONSTRUCTION_SQUARE) {
@@ -2080,10 +2081,13 @@ bool TaskManageBuildings::ReconnectBuilding(AccessMap& access_map, Rect* bounds,
         }
     }
 
+    /* the squares next to a building on the map edge lie partly outside the map */
+    rect_init(&map_bounds, 0, 0, ResourceManager_MapSize.x, ResourceManager_MapSize.y);
+
     for (site.x = bounds->ulx; site.x < bounds->lrx; ++site.x) {
         site.y = bounds->uly - 1;
 
-        if (access_map(site.x, site.y) == MARKER_EMPTY_SQUARE) {
+        if (Access_IsInsideBounds(&map_bounds, &site) && access_map(site.x, site.y) == MARKER_EMPTY_SQUARE) {
             if (ConnectBuilding(access_map, site, value)) {
                 UpdateConnectors(access_map, site.x, site.y, site.x + 1, site.y + 1);
 
@@ -2093,7 +2097,7 @@ bool TaskManageBuildings::ReconnectBuilding(AccessMap& access_map, Rect* bounds,
 
         site.y = bounds->lry;
 
-        if (access_map(site.x, site.y) == MARKER_EMPTY_SQUARE) {
+        if (Access_IsInsideBounds(&map_bounds, &site) && access_map(site.x, site.y) == MARKER_EMPTY_SQUARE) {
             if (ConnectBuilding(access_map, site, value)) {
                 UpdateConnectors(access_map, site.x, site.y, site.x + 1, site.y + 1);
 
@@ -2105,7 +2109,7 @@ bool TaskManageBuildings::ReconnectBuilding(AccessMap& access_map, Rect* bounds,
     for (site.y = bounds->uly; site.y < bounds->lry; ++site.y) {
         site.x = bounds->ulx - 1;
 
-        if (access_map(site.x, site.y) == MARKER_EMPTY_SQUARE) {
+        if (Access_IsInsideBounds(&map_bounds, &site) && access_map(site.x, site.y) == MARKER_EMPTY_SQUARE) {
             if (ConnectBuilding(access_map, site, value)) {
                 UpdateConnectors(access_map, site.x, site.y, site.x + 1, site.y + 1);
 
@@ -2115,7 +2119,7 @@ bool TaskManageBuildings::ReconnectBuilding(AccessMap& access_map, Rect* bounds,
 
         site.x = bounds->lrx;
 
-        if (access_map(site.x, site.y) == MARKER_EMPTY_SQUARE) {
+        if (Access_IsInsideBounds(&map_bounds, &site) && access_map(site.x, site.y) == MARKER_EMPTY_SQUARE) {
             if (ConnectBuilding(access_map, site, value)) {
                 UpdateConnectors(access_map, site.x, site.y, site.x + 1, site.y + 1);
 

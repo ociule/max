@@ -50,6 +50,10 @@ class TaskAttack : public Task {
     SmartPointer<UnitInfo> recon_unit;
     SmartObjectArray<ResourceID> managed_unit_types;
     bool attack_zone_reached;
+    // the defenders' fire on the current target, summed once per turn and target
+    const UnitInfo* fire_target{nullptr};
+    int32_t fire_turn{-1};
+    int32_t defenders_fire{0};
 
     bool EvaluateLandAttack();
     void Finish();
@@ -78,10 +82,16 @@ class TaskAttack : public Task {
     bool IsDefenderDangerous(SpottedUnit* spotted_unit);
     void RemoveTask(TaskKillUnit* task);
     void AssessEnemyUnits();
+    void HandOverUnit(UnitInfo& unit, TaskKillUnit& task);
+    void AddTargetsWithinReach(SmartList<UnitInfo>& units);
 
 public:
     TaskAttack(SpottedUnit* spotted_unit, uint16_t task_priority);
     ~TaskAttack();
+
+    /* Keeps the units of a kill task whose target was destroyed for the targets they can strike this turn.
+     */
+    void PressOn(TaskKillUnit& task);
 
     bool IsUnitUsable(UnitInfo& unit);
     int32_t GetCautionLevel(UnitInfo& unit);
@@ -106,6 +116,20 @@ public:
     bool IsDestinationReached(UnitInfo* unit);
     uint32_t GetAccessFlags() const;
     bool IsExecutionPhase();
+
+    /* Sums the build cost of the units in the attack's kill tasks.
+     */
+    int32_t GetUnitValue();
+
+    /* Sums the attack times rounds of the armed enemies that cover the current target.
+     */
+    int32_t GetDefendersFire();
+
+    bool IsCurrentTarget(const TaskKillUnit* task) const;
+
+#if !defined(NDEBUG)
+    std::string GetCensus();
+#endif /* !defined(NDEBUG) */
 };
 
 #endif /* TASKATTACK_HPP */

@@ -48,7 +48,7 @@ bool TaskEscort::IssueOrders(UnitInfo* unit) {
         Point position;
         auto info_map = AiPlayer_Teams[m_team].GetInfoMap();
         int16_t** damage_potential_map =
-            AiPlayer_Teams[m_team].GetDamagePotentialMap(unit, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, false);
+            AiPlayer_Teams[m_team].GetDamagePotentialMap(unit, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
         Rect bounds;
         ResourceID escort_type = INVALID_ID;
 
@@ -208,14 +208,11 @@ void TaskEscort::EndTurn() {
             } else {
                 if (!is_escort_requested) {
                     if (unit_type == FIGHTER || unit_type == SP_FLAK || unit_type == FASTBOAT) {
-                        bool teams[PLAYER_TEAM_MAX];
                         SmartList<UnitInfo>::Iterator it;
-
-                        AiAttack_GetTargetTeams(m_team, teams);
 
                         for (it = UnitsManager_StationaryUnits.Begin(); it != UnitsManager_StationaryUnits.End();
                              ++it) {
-                            if ((*it).team != m_team && teams[(*it).team] && (*it).GetUnitType() == AIRPLT) {
+                            if ((*it).team != m_team && (*it).GetUnitType() == AIRPLT) {
                                 break;
                             }
                         }
@@ -223,7 +220,7 @@ void TaskEscort::EndTurn() {
                         if (it == UnitsManager_StationaryUnits.End()) {
                             for (it = UnitsManager_MobileAirUnits.Begin(); it != UnitsManager_MobileAirUnits.End();
                                  ++it) {
-                                if ((*it).team != m_team && teams[(*it).team]) {
+                                if ((*it).team != m_team) {
                                     break;
                                 }
                             }

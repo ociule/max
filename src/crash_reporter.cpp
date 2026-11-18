@@ -37,6 +37,7 @@
 
 #include "backtrace-supported.h"
 #include "backtrace.h"
+#include "version.hpp"
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -483,7 +484,14 @@ void CrashReporter_WriteContext(int fd) {
 
     CrashReporter_Write(fd, "Play mode       : ");
     CrashReporter_WriteSigned(fd, context.play_mode);
-    CrashReporter_Write(fd, context.real_time ? " (real time)\n" : " (turn based)\n");
+
+    if (context.play_mode_name[0] != '\0') {
+        CrashReporter_Write(fd, " (");
+        CrashReporter_Write(fd, context.play_mode_name);
+        CrashReporter_Write(fd, ")");
+    }
+
+    CrashReporter_Write(fd, context.real_time ? ", real time\n" : "\n");
 
     CrashReporter_Write(fd, "Player team     : ");
     CrashReporter_WriteSigned(fd, context.player_team);
