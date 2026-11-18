@@ -26,7 +26,7 @@
 using PowerCapture::Structure;
 
 static std::vector<uint16_t> PlanOwners(const std::vector<PowerCapture::Structure>& structures,
-                                        const std::vector<uint16_t>& completed_units) {
+                                        const std::vector<uint32_t>& completed_units) {
     return PowerCapture::Plan(structures, completed_units).owners;
 }
 
@@ -248,7 +248,7 @@ TEST(PowerCapture, NewStructureBetweenUnpoweredOwnersKeepsBothOwners) {
 }
 
 static PowerCapture::PlanResult PlanPhysicalNetworks(std::vector<Structure> structures,
-                                                     const std::vector<uint16_t>& completed_units) {
+                                                     const std::vector<uint32_t>& completed_units) {
     const auto networks = PowerCapture::FindNetworks(structures);
     for (size_t i = 0; i < structures.size(); ++i) {
         structures[i].network = networks[i];
