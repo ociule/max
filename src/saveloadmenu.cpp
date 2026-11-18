@@ -496,7 +496,8 @@ int32_t SaveLoadMenu_MenuLoop(const MissionCategory mission_category, const bool
                                         result = save_slot;
                                     }
                                 } break;
-                                case static_cast<uint32_t>(SmartFileFormat::V71): {
+                                case static_cast<uint32_t>(SmartFileFormat::V71):
+                                case static_cast<uint32_t>(SmartFileFormat::V72): {
                                     /// \todo language
                                     auto mission = std::make_shared<Mission>();
 
