@@ -36,6 +36,8 @@ extern uint16_t UnitsManager_DelayedReactionsTeam;
 
 extern uint32_t UnitsManager_DelayedReactionsSyncCounter;
 
+extern uint32_t UnitsManager_UnitIdCounter;
+
 extern SmartList<UnitInfo> UnitsManager_GroundCoverUnits;
 extern SmartList<UnitInfo> UnitsManager_MobileLandSeaUnits;
 extern SmartList<UnitInfo> UnitsManager_ParticleUnits;
@@ -70,6 +72,7 @@ void UnitsManager_InitPopupMenus();
 int32_t UnitsManager_GetStealthChancePercentage(UnitInfo* unit1, UnitInfo* unit2, int32_t order);
 bool UnitsManager_IsValidStealthTarget(UnitInfo* unit, UnitInfo* target, int32_t order);
 bool UnitsManager_IsEngaged(UnitInfo* unit);
+void UnitsManager_EndAttack(UnitInfo* unit);
 SmartPointer<UnitInfo> UnitsManager_SpawnUnit(ResourceID unit_type, uint16_t team, int32_t grid_x, int32_t grid_y,
                                               UnitInfo* parent);
 void UnitsManager_ProcessOrders();

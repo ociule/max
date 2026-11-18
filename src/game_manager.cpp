@@ -308,6 +308,7 @@ static void GameManager_DrawSelectSiteMessage(uint16_t team);
 static bool GameManager_SelectSite(uint16_t team);
 static void GameManager_InitMap();
 static void GameManager_GameSetup(int32_t game_state);
+static void GameManager_LogGameStart();
 static void GameManager_GameLoopCleanup();
 static uint16_t GameManager_EvaluateWinner();
 static void GameManager_AnnounceWinner(uint16_t team);
@@ -730,7 +731,7 @@ void GameManager_DeployUnit(uint16_t team, ResourceID unit_type, int32_t grid_x,
         UnitsManager_SetInitialMining(&*unit, grid_x, grid_y);
     }
 
-    if (flags & (CONNECTOR_UNIT | BUILDING | STANDALONE)) {
+    if (unit->IsComplexMember()) {
         UnitsManager_UpdateConnectors(&*unit);
     }
 
@@ -1980,6 +1981,12 @@ void GameManager_GameSetup(int32_t game_state) {
     mouse_set_position(WindowManager_GetWidth(window) / 2, WindowManager_GetHeight(window) / 2);
     mouse_show();
 
+    GameManager_LogGameStart();
+}
+
+/* Marks a new or loaded game in the AI log and starts its order log game.
+ */
+void GameManager_LogGameStart() {
 #if !defined(NDEBUG)
     if (const World* world = ResourceManager_GetActiveWorld()) {
         AILOG(log, "Game start on world {}, {}x{} map.", ResourceManager_GetResourceID(world->GetResourceId()),
@@ -2324,7 +2331,7 @@ uint16_t GameManager_GetCrc16(uint16_t data, uint16_t crc_checksum) {
 uint16_t GameManager_GetUnitListChecksum(SmartList<UnitInfo>* units, uint16_t team, uint16_t crc_checksum) {
     if (UnitsManager_TeamInfo[team].team_type != TEAM_TYPE_NONE || team == PLAYER_TEAM_ALIEN) {
         for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-            if ((*it).GetId() != 0xFFFF && !((*it).flags & EXPLODING) && (*it).team == team) {
+            if ((*it).GetId() != UnitInfo::NO_ID && !((*it).flags & EXPLODING) && (*it).team == team) {
                 crc_checksum = GameManager_GetCrc16((*it).team, crc_checksum);
                 crc_checksum = GameManager_GetCrc16((*it).GetUnitType(), crc_checksum);
                 crc_checksum = GameManager_GetCrc16((*it).unit_id, crc_checksum);
@@ -3331,6 +3338,8 @@ bool GameManager_LoadGame(int32_t save_slot, Color* palette_buffer) {
         GameManager_PlayFlic = false;
         GameManager_GameState = GAME_STATE_10_LOAD_GAME;
 
+        ORDER_LOG_GAME_END();
+
         UnitsManager_GroundCoverUnits.Clear();
         UnitsManager_MobileLandSeaUnits.Clear();
         UnitsManager_ParticleUnits.Clear();
@@ -3386,6 +3395,8 @@ bool GameManager_LoadGame(int32_t save_slot, Color* palette_buffer) {
         }
 
         if (load_successful) {
+            GameManager_LogGameStart();
+
             if (Remote_IsNetworkGame) {
                 Remote_WaitBeginTurnAcknowledge();
             }
@@ -4168,8 +4179,7 @@ void GameManager_SetUnitOrder(const UnitOrderType order, const UnitOrderStateTyp
     unit->move_to_grid_x = grid_x;
     unit->move_to_grid_y = grid_y;
 
-    if (unit->GetOrder() == ORDER_MOVE || unit->GetOrder() == ORDER_MOVE_TO_UNIT ||
-        unit->GetOrder() == ORDER_MOVE_TO_ATTACK) {
+    if (unit->HasMoveOrder()) {
         unit->SetOrder(unit->GetPriorOrder());
         unit->SetOrderState(unit->GetPriorOrderState());
     }

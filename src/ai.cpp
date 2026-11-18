@@ -202,12 +202,11 @@ void Ai_EnableAutoSurvey(UnitInfo* unit) {
     TaskManager.AppendTask(*task);
 }
 
-bool Ai_IsDangerousLocation(UnitInfo* unit, Point destination, int32_t caution_level, bool is_for_attacking) {
+bool Ai_IsDangerousLocation(UnitInfo* unit, Point destination, int32_t caution_level) {
     bool result;
 
     if (UnitsManager_TeamInfo[unit->team].team_type == TEAM_TYPE_COMPUTER && caution_level != CAUTION_LEVEL_NONE) {
-        int16_t** damage_potential_map =
-            AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level, is_for_attacking);
+        int16_t** damage_potential_map = AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level);
         int32_t unit_hits = unit->hits;
 
         if (caution_level == CAUTION_LEVEL_AVOID_ALL_DAMAGE) {
@@ -374,6 +373,12 @@ void Ai_UnitSpotted(UnitInfo* unit, uint16_t team) {
     }
 
     TaskManager.AddSpottedUnit(unit);
+}
+
+void Ai_UnitHidden(UnitInfo* unit, uint16_t team) {
+    if (UnitsManager_TeamInfo[team].team_type == TEAM_TYPE_COMPUTER && (unit->flags & SELECTABLE)) {
+        AiPlayer_Teams[team].UnitHidden(unit);
+    }
 }
 
 void Ai_EvaluateAttackTargets(UnitInfo* unit) { TaskManager.CollectPotentialAttackTargets(unit); }

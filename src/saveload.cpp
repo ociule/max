@@ -597,14 +597,13 @@ bool SaveLoad_Save(const std::filesystem::path& filepath, const char* const save
         {
             for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX; ++team) {
                 const CTInfo* const team_info = &UnitsManager_TeamInfo[team];
-                uint16_t unit_id;
+                uint32_t unit_id;
 
                 file.Write(team_info->team_type);
                 file.Write(team_info->finished_turn);
                 file.Write(team_info->team_clan);
                 file.Write(team_info->research_topics);
                 file.Write(team_info->team_points);
-                file.Write(team_info->number_of_objects_created);
                 file.Write(team_info->unit_counters);
                 file.Write(team_info->screen_locations);
                 file.Write(team_info->score_graph, sizeof(team_info->score_graph));
@@ -612,7 +611,7 @@ bool SaveLoad_Save(const std::filesystem::path& filepath, const char* const save
                 if (team_info->selected_unit != nullptr) {
                     unit_id = team_info->selected_unit->GetId();
                 } else {
-                    unit_id = 0xFFFF;
+                    unit_id = UnitInfo::NO_ID;
                 }
 
                 file.Write(unit_id);
@@ -637,6 +636,13 @@ bool SaveLoad_Save(const std::filesystem::path& filepath, const char* const save
                 file.Write(team_info->casualties);
                 file.Write(team_info->stats_gold_spent_on_upgrades);
             }
+        }
+
+        // unit id counter
+        {
+            uint32_t unit_id_counter = UnitsManager_UnitIdCounter;
+
+            error |= !file.Write(unit_id_counter);
         }
 
         // active team index
@@ -828,8 +834,12 @@ bool SaveLoad_LoadFormatV70(SmartFileReader& file, const MissionCategory mission
 
     ResourceManager_InitTeamInfo();
 
+    // V70 ids hold the team from bit 13 on, new ids start above all of them
+    UnitsManager_UnitIdCounter = PLAYER_TEAM_MAX << 13;
+
     for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
         CTInfo* team_info;
+        uint16_t number_of_objects_created_v70;
         uint8_t unit_counters_v70[UNIT_END];
         Point markers_v70[10];
 
@@ -841,7 +851,7 @@ bool SaveLoad_LoadFormatV70(SmartFileReader& file, const MissionCategory mission
         file.Read(team_info->team_clan);
         file.Read(team_info->research_topics);
         file.Read(team_info->team_points);
-        file.Read(team_info->number_of_objects_created);
+        file.Read(number_of_objects_created_v70);
 
         file.Read(unit_counters_v70);
 
@@ -1115,7 +1125,7 @@ bool SaveLoad_LoadFormatV71(SmartFileReader& file, const MissionCategory mission
     int32_t backup_fuel_resource;
     int32_t backup_gold_resource;
     int32_t backup_alien_derelicts;
-    uint16_t selected_unit_ids[PLAYER_TEAM_MAX];
+    uint32_t selected_unit_ids[PLAYER_TEAM_MAX];
 
     if (!is_remote_game) {
         for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
@@ -1194,7 +1204,6 @@ bool SaveLoad_LoadFormatV71(SmartFileReader& file, const MissionCategory mission
         file.Read(team_info->team_clan);
         file.Read(team_info->research_topics);
         file.Read(team_info->team_points);
-        file.Read(team_info->number_of_objects_created);
         file.Read(team_info->unit_counters);
         file.Read(team_info->screen_locations);
         file.Read(team_info->score_graph, sizeof(team_info->score_graph));
@@ -1219,6 +1228,14 @@ bool SaveLoad_LoadFormatV71(SmartFileReader& file, const MissionCategory mission
         file.Read(team_info->stats_units_built);
         file.Read(team_info->casualties);
         file.Read(team_info->stats_gold_spent_on_upgrades);
+    }
+
+    {
+        uint32_t unit_id_counter;
+
+        file.Read(unit_id_counter);
+
+        UnitsManager_UnitIdCounter = unit_id_counter;
     }
 
     {
@@ -1380,7 +1397,7 @@ bool SaveLoad_LoadFormatV71(SmartFileReader& file, const MissionCategory mission
     GameManager_SelectedUnit = nullptr;
 
     for (int32_t team = PLAYER_TEAM_RED; team < PLAYER_TEAM_MAX - 1; ++team) {
-        if (selected_unit_ids[team] != 0xFFFF) {
+        if (selected_unit_ids[team] != UnitInfo::NO_ID) {
             UnitsManager_TeamInfo[team].selected_unit = Hash_UnitHash[selected_unit_ids[team]];
 
         } else {

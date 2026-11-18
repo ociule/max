@@ -1186,6 +1186,8 @@ void ResourceManager_InitInGameAssets(int32_t world) {
 
     ResourceManager_MapSize = ResourceManager_ActiveWorld->GetMapSize();
 
+    Hash_MapHash.SetMapSize(ResourceManager_MapSize);
+
     ResourceManager_InitMainmapResources();
     ResourceManager_InitMinimapResources();
 
@@ -1338,6 +1340,8 @@ void ResourceManager_InitTeamInfo() {
             UnitsManager_TeamInfo[i].team_clan = TEAM_CLAN_RANDOM;
         }
     }
+
+    UnitsManager_UnitIdCounter = 0;
 
     ResourceManager_TeamUnitsRed.ClearComplexes();
     ResourceManager_TeamUnitsGreen.ClearComplexes();

@@ -413,12 +413,12 @@ void AccessMap::ApplyCautionLevel(UnitInfo* unit, int32_t caution_level) {
             int32_t unit_hits = unit->hits;
             int16_t** damage_potential_map;
 
-            if (unit->GetId() == 0xFFFF) {
+            if (unit->GetId() == UnitInfo::NO_ID) {
                 damage_potential_map =
-                    AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit->GetUnitType(), caution_level, true);
+                    AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit->GetUnitType(), caution_level);
 
             } else {
-                damage_potential_map = AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level, true);
+                damage_potential_map = AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level);
             }
 
             if (damage_potential_map) {

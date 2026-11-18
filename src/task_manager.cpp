@@ -272,8 +272,17 @@ void TaskManager::AppendReminder(Reminder* reminder, bool priority) {
     }
 }
 
+void TaskManager::AppendDeferredReminder(Reminder* reminder) { deferred_reminders.PushBack(*reminder); }
+
 bool TaskManager::ExecuteReminders() {
     bool result;
+
+    // units move only between the calls, so a reminder that waits for them runs once per call
+    for (auto it = deferred_reminders.Begin(), it_end = deferred_reminders.End(); it != it_end; ++it) {
+        normal_reminders.PushBack(*it);
+    }
+
+    deferred_reminders.Clear();
 
     if (normal_reminders.GetCount() + priority_reminders.GetCount() > 0) {
         AILOG(log, "Execute reminders");
@@ -394,6 +403,7 @@ void TaskManager::Clear() {
     unit_requests.Clear();
     normal_reminders.Clear();
     priority_reminders.Clear();
+    deferred_reminders.Clear();
     units_awaiting_reaction.Clear();
 
     reminder_counter = 0;
@@ -423,6 +433,13 @@ void TaskManager::FindTaskForUnit(UnitInfo* unit) {
             unit->GetUnitType() == LIGHTPLT || unit->GetUnitType() == LANDPLT || unit->GetUnitType() == SHIPYARD ||
             unit->GetUnitType() == AIRPLT || unit->GetUnitType() == TRAINHAL) {
             if (!unit->GetTask() && unit->hits > 0) {
+                // a disabled unit gets no task: the disable removed its tasks, and the first turn start after the
+                // disable offers the unit again
+                if (unit->GetOrder() == ORDER_DISABLE ||
+                    (unit->GetOrder() == ORDER_IDLE && unit->GetPriorOrder() == ORDER_DISABLE)) {
+                    return;
+                }
+
                 SmartPointer<TaskObtainUnits> obtain_units_task;
                 uint16_t task_priority{UINT16_MAX};
 
@@ -605,6 +622,8 @@ void TaskManager::AddSpottedUnit(UnitInfo* unit) {
     }
 }
 
-uint32_t TaskManager::GetRemindersCount() const { return normal_reminders.GetCount() + priority_reminders.GetCount(); }
+uint32_t TaskManager::GetRemindersCount() const {
+    return normal_reminders.GetCount() + priority_reminders.GetCount() + deferred_reminders.GetCount();
+}
 
 SmartList<Task>& TaskManager::GetTaskList() { return tasks; }

@@ -21,8 +21,12 @@
 
 #include "aiattack.hpp"
 
+#include <algorithm>
+#include <vector>
+
 #include "access.hpp"
 #include "ai.hpp"
+#include "ailog.hpp"
 #include "aiplayer.hpp"
 #include "game_manager.hpp"
 #include "randomizer.hpp"
@@ -103,7 +107,7 @@ bool AiAttack_ChooseSiteToSabotage(UnitInfo* unit1, UnitInfo* unit2, Point* site
     auto info_map = AiPlayer_Teams[unit1->team].GetInfoMap();
     Point position;
     bool result = false;
-    int16_t** damage_potential_map = AiPlayer_Teams[unit1->team].GetDamagePotentialMap(unit1, caution_level, true);
+    int16_t** damage_potential_map = AiPlayer_Teams[unit1->team].GetDamagePotentialMap(unit1, caution_level);
     int32_t distance;
     int32_t minimum_distance = INT16_MAX;
     int32_t damage_potential = 0;
@@ -193,7 +197,7 @@ bool AiAttack_ChooseSiteForAttacker(UnitInfo* unit, Point target, Point* site, i
 
     distance1 = distance1 * distance1;
 
-    damage_potential_map = AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level, true);
+    damage_potential_map = AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level);
 
     *projected_damage = INT16_MAX;
 
@@ -480,9 +484,14 @@ bool AiAttack_FindAttackSupport(UnitInfo* unit, SmartList<UnitInfo>* units, uint
 
                     if (((*it).GetBaseValues()->GetAttribute(ATTRIB_MOVE_AND_FIRE) &&
                          ResourceManager_GetSettings()->GetNumericValue("opponent") >= OPPONENT_TYPE_AVERAGE) ||
-                        (AiPlayer_Teams[team].GetDamagePotential(it->Get(), position, caution_level, true) <
-                         (*it).hits)) {
-                        AiAttack_ProcessAttack(it->Get(), unit);
+                        (AiPlayer_Teams[team].GetDamagePotential(it->Get(), position, caution_level) < (*it).hits)) {
+                        if (!AiAttack_ProcessAttack(it->Get(), unit)) {
+                            AILOG(log, "Support by {} id {} at [{},{}] on {} id {} at [{},{}] was not ordered.",
+                                  ResourceManager_GetUnit((*it).GetUnitType()).GetSingularName().data(), (*it).GetId(),
+                                  (*it).grid_x + 1, (*it).grid_y + 1,
+                                  ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(), unit->GetId(),
+                                  unit->grid_x + 1, unit->grid_y + 1);
+                        }
 
                         result = true;
                     }
@@ -636,7 +645,7 @@ SpottedUnit* AiAttack_SelectTargetToAttack(UnitInfo* unit, int32_t range, int32_
 
                                     if (caution_level > CAUTION_LEVEL_NONE && !damage_potential_map) {
                                         damage_potential_map =
-                                            AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level, true);
+                                            AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, caution_level);
                                     }
 
                                     if (damage_potential_map) {
@@ -739,6 +748,12 @@ bool AiAttack_EvaluateAttack(UnitInfo* unit, bool mode) {
                                 result = false;
 
                             } else if (target->AreTherePins()) {
+                                AILOG(log, "Attack by {} id {} at [{},{}] waits, {} id {} at [{},{}] has {} pins.",
+                                      ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(),
+                                      unit->GetId(), unit->grid_x + 1, unit->grid_y + 1,
+                                      ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(),
+                                      target->GetId(), target->grid_x + 1, target->grid_y + 1, target->pin_count);
+
                                 SmartPointer<Task> wait_to_attack_task(new (std::nothrow) TaskWaitToAttack(unit));
 
                                 TaskManager.AppendTask(*wait_to_attack_task);
@@ -759,8 +774,7 @@ bool AiAttack_EvaluateAttack(UnitInfo* unit, bool mode) {
                                          unit->GetBaseValues()->GetAttribute(ATTRIB_TURNS) ||
                                      unit->shots * UnitsManager_GetAttackDamage(unit, target, 0) < target->hits)) {
                                     int32_t damage_potential = AiPlayer_Teams[unit->team].GetDamagePotential(
-                                        unit, Point(unit->grid_x, unit->grid_y), CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE,
-                                        true);
+                                        unit, Point(unit->grid_x, unit->grid_y), CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
 
                                     if (damage_potential >= unit->hits) {
                                         if (AiAttack_FindAttackSupport(target, &UnitsManager_MobileAirUnits, unit->team,
@@ -768,6 +782,15 @@ bool AiAttack_EvaluateAttack(UnitInfo* unit, bool mode) {
                                             AiAttack_FindAttackSupport(target, &UnitsManager_MobileLandSeaUnits,
                                                                        unit->team,
                                                                        CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE)) {
+                                            AILOG(
+                                                log,
+                                                "Attack by {} id {} at [{},{}] on {} id {} at [{},{}] "
+                                                "waits for support.",
+                                                ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(),
+                                                unit->GetId(), unit->grid_x + 1, unit->grid_y + 1,
+                                                ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(),
+                                                target->GetId(), target->grid_x + 1, target->grid_y + 1);
+
                                             return true;
                                         }
 
@@ -786,7 +809,18 @@ bool AiAttack_EvaluateAttack(UnitInfo* unit, bool mode) {
                                     }
                                 }
 
-                                AiAttack_ProcessAttack(unit, target);
+                                if (!AiAttack_ProcessAttack(unit, target)) {
+                                    AILOG(log,
+                                          "Attack by {} id {} at [{},{}] on {} id {} at [{},{}] was not ordered, "
+                                          "range {}, target {} sight, last seen at [{},{}].",
+                                          ResourceManager_GetUnit(unit->GetUnitType()).GetSingularName().data(),
+                                          unit->GetId(), unit->grid_x + 1, unit->grid_y + 1,
+                                          ResourceManager_GetUnit(target->GetUnitType()).GetSingularName().data(),
+                                          target->GetId(), target->grid_x + 1, target->grid_y + 1,
+                                          unit->GetBaseValues()->GetAttribute(ATTRIB_RANGE),
+                                          target->IsVisibleToTeam(unit->team) ? "in" : "out of",
+                                          spotted_unit->GetLastPositionX() + 1, spotted_unit->GetLastPositionY() + 1);
+                                }
 
                                 result = true;
                             }
@@ -916,7 +950,7 @@ bool AiAttack_EvaluateAssault(UnitInfo* unit, Task* task,
                                 caution_level = CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE;
 
                                 projected_damage = AiPlayer_Teams[unit_team].GetDamagePotential(
-                                    unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, true);
+                                    unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
                             }
 
                             attack_potential = AiAttack_GetAttackPotential(unit, target);
@@ -926,7 +960,7 @@ bool AiAttack_EvaluateAssault(UnitInfo* unit, Task* task,
 
                             } else {
                                 damage_potential = AiPlayer_Teams[unit_team].GetDamagePotential(
-                                    unit, site, CAUTION_LEVEL_AVOID_REACTION_FIRE, true);
+                                    unit, site, CAUTION_LEVEL_AVOID_REACTION_FIRE);
                             }
 
                             unit_shots = 0;
@@ -974,7 +1008,7 @@ bool AiAttack_EvaluateAssault(UnitInfo* unit, Task* task,
                                         caution_level = CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE;
 
                                         projected_damage = AiPlayer_Teams[unit_team].GetDamagePotential(
-                                            unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, true);
+                                            unit, site, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
 
                                         if (AiAttack_IsAttackProfitable(unit, target, projected_damage,
                                                                         CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, 0x00)) {
@@ -1133,6 +1167,7 @@ bool AiAttack_FollowAttacker(Task* task, UnitInfo* unit, uint16_t task_priority)
         auto info_map = AiPlayer_Teams[unit->team].GetInfoMap();
         Point unit_position(unit->grid_x, unit->grid_y);
         ResourceID transporter_type = INVALID_ID;
+        const std::vector<Point> claimed_sites = TaskMove::GetClaimedSites(unit);
 
         if (unit->flags & MOBILE_LAND_UNIT) {
             if (Task_GetReadyUnitsCount(unit->team, AIRTRANS) > 0) {
@@ -1145,7 +1180,7 @@ bool AiAttack_FollowAttacker(Task* task, UnitInfo* unit, uint16_t task_priority)
 
         TransporterMap map(unit, 0x02, CAUTION_LEVEL_NONE, transporter_type);
         int16_t** damage_potential_map =
-            AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE, true);
+            AiPlayer_Teams[unit->team].GetDamagePotentialMap(unit, CAUTION_LEVEL_AVOID_NEXT_TURNS_FIRE);
         int32_t range = Access_GetApproximateDistance(&*leader, unit) / 2;
 
         target_location = unit_position;
@@ -1170,7 +1205,9 @@ bool AiAttack_FollowAttacker(Task* task, UnitInfo* unit, uint16_t task_priority)
                                                                     INFO_MAP_CLEAR_OUT_ZONE))) {
                                 if (map.Search(unit_position) &&
                                     Access_IsAccessible(unit->GetUnitType(), unit->team, unit_position.x,
-                                                        unit_position.y, AccessModifier_SameClassBlocks)) {
+                                                        unit_position.y, AccessModifier_SameClassBlocks) &&
+                                    std::find(claimed_sites.begin(), claimed_sites.end(), unit_position) ==
+                                        claimed_sites.end()) {
                                     target_location = unit_position;
                                     range = distance;
                                 }

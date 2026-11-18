@@ -160,6 +160,7 @@ UnitInfo::UnitInfo()
       unit_list(nullptr),
       in_transit(false),
       pin_count(0),
+      live_attack(0),
       tasks_enabled(true),
       laying_state(0),
       visible_to_team(),
@@ -170,7 +171,7 @@ UnitInfo::UnitInfo()
       turret_image_index(0),
       ai_state_bits(0) {}
 
-UnitInfo::UnitInfo(ResourceID unit_type, uint16_t team, uint16_t id, uint8_t angle)
+UnitInfo::UnitInfo(ResourceID unit_type, uint16_t team, uint32_t id, uint8_t angle)
     : name(nullptr),
       sound(Unit::SFX_TYPE_INVALID),
       unit_type(unit_type),
@@ -248,6 +249,7 @@ UnitInfo::UnitInfo(ResourceID unit_type, uint16_t team, uint16_t id, uint8_t ang
       unit_list(nullptr),
       in_transit(false),
       pin_count(0),
+      live_attack(0),
       tasks_enabled(true),
       laying_state(0),
       visible_to_team(),
@@ -311,7 +313,7 @@ UnitInfo::UnitInfo(ResourceID unit_type, uint16_t team, uint16_t id, uint8_t ang
 
     InitStealthStatus();
 
-    if ((flags & (CONNECTOR_UNIT | BUILDING | STANDALONE)) && !(flags & GROUND_COVER) && id != 0xFFFF) {
+    if (IsComplexMember()) {
         AttachComplex(CreateComplex(team));
     }
 }
@@ -401,6 +403,8 @@ UnitInfo::UnitInfo(const UnitInfo& other)
       in_transit(other.in_transit),
       last_target(other.last_target),
       pin_count(other.pin_count),
+      // a copy is a snapshot and holds no attack
+      live_attack(0),
       tasks_enabled(other.tasks_enabled),
       laying_state(other.laying_state),
       name(nullptr),
@@ -579,11 +583,22 @@ void UnitInfo::Init() {
 
 bool UnitInfo::IsVisibleToTeam(uint16_t team) const { return visible_to_team[team]; }
 
+void UnitInfo::SetVisibleToTeam(uint16_t team, bool visible) {
+    const bool was_visible = visible_to_team[team];
+
+    visible_to_team[team] = visible;
+
+    // the computer players remember where the unit left their sight
+    if (was_visible && !visible && team != this->team) {
+        Ai_UnitHidden(this, team);
+    }
+}
+
 void UnitInfo::SetEnemy(UnitInfo* enemy) { enemy_unit = enemy; }
 
 UnitInfo* UnitInfo::GetEnemy() const { return enemy_unit.Get(); }
 
-uint16_t UnitInfo::GetId() const { return id; }
+uint32_t UnitInfo::GetId() const { return id; }
 
 UnitInfo* UnitInfo::GetFirstFromUnitList() const {
     UnitInfo* result;
@@ -1300,26 +1315,11 @@ void UnitInfo::SetPosition(int32_t grid_x, int32_t grid_y, bool skip_map_status_
 
     Hash_MapHash.Add(this, flags & GROUND_COVER);
 
-    if (!skip_map_status_update && ((GetId() != 0xFFFF) || (flags & (EXPLODING | MISSILE_UNIT)))) {
+    if (!skip_map_status_update && ((GetId() != NO_ID) || (flags & (EXPLODING | MISSILE_UNIT)))) {
         Access_UpdateMapStatus(this, true);
     }
 
     AddToDrawList();
-}
-
-void UnitInfo::UpdatePinCount(int32_t grid_x, int32_t grid_y, int32_t pin_units) {
-    if (base_values->GetAttribute(ATTRIB_ATTACK_RADIUS)) {
-        UpdatePinsFromLists(grid_x, grid_y, &UnitsManager_GroundCoverUnits, pin_units);
-        UpdatePinsFromLists(grid_x, grid_y, &UnitsManager_StationaryUnits, pin_units);
-        UpdatePinsFromLists(grid_x, grid_y, &UnitsManager_MobileLandSeaUnits, pin_units);
-
-    } else {
-        SmartPointer<UnitInfo> target(Access_GetAttackTarget(this, grid_x, grid_y));
-
-        if (target) {
-            target->pin_count += pin_units;
-        }
-    }
 }
 
 void UnitInfo::RemoveTasks() {
@@ -1563,12 +1563,6 @@ void UnitInfo::AttackUnit(UnitInfo* enemy, int32_t attack_potential, int32_t dir
             Ai_UnitSpotted(enemy, team);
         }
 
-        --pin_count;
-
-        if (pin_count < 0) {
-            pin_count = 0;
-        }
-
         if (attack_damage > hits) {
             attack_damage = hits;
         }
@@ -1664,6 +1658,8 @@ bool UnitInfo::ExecuteMove() {
                 SmartPointer<UnitInfo> parent;
 
                 parent = GetParent();
+
+                UnitsManager_EndAttack(this);
                 parent->Attack(grid_x, grid_y);
 
                 UnitsManager_DestroyUnit(this);
@@ -1847,7 +1843,7 @@ void UnitInfo::Move() {
                 state = ORDER_STATE_IN_PROGRESS;
             }
 
-            if (orders == ORDER_MOVE || orders == ORDER_MOVE_TO_UNIT || orders == ORDER_MOVE_TO_ATTACK) {
+            if (HasMoveOrder()) {
                 FollowUnit();
             }
 
@@ -1862,7 +1858,7 @@ void UnitInfo::Move() {
             if (mine) {
                 mine->SetOrder(ORDER_EXPLODE);
                 mine->state = ORDER_STATE_EXPLODE;
-                mine->visible_to_team[team] = true;
+                mine->SetVisibleToTeam(team, true);
 
                 Ai_UnitSpotted(&*mine, team);
 
@@ -2323,7 +2319,18 @@ void UnitInfo::DetachComplex() {
 
 void UnitInfo::FileLoad(SmartFileReader& file) noexcept {
     file.Read(unit_type);
-    file.Read(id);
+
+    if (file.GetFormat() == SmartFileFormat::V70) {
+        uint16_t id_v70;
+
+        file.Read(id_v70);
+
+        id = (id_v70 == 0xFFFF) ? NO_ID : id_v70;
+
+    } else {
+        file.Read(id);
+    }
+
     file.Read(flags);
     file.Read(x);
     file.Read(y);
@@ -2457,20 +2464,16 @@ void UnitInfo::FileLoad(SmartFileReader& file) noexcept {
     file.Read(cursor);
 
     if (file.GetFormat() == SmartFileFormat::V70) {
-        int8_t recoil_delay;
+        uint8_t recoil_delay;
 
         file.Read(recoil_delay);
 
-        if (recoil_delay < 0) {
-            recoil_delay = 0;
-        }
-
-        if (orders == ORDER_DISABLE) {
-            disabled_turns_remaining = static_cast<uint8_t>(recoil_delay);
+        if (orders == ORDER_DISABLE || prior_orders == ORDER_DISABLE) {
+            disabled_turns_remaining = recoil_delay;
             firing_recoil_frames = 0;
 
         } else {
-            firing_recoil_frames = static_cast<uint8_t>(recoil_delay);
+            firing_recoil_frames = recoil_delay;
             disabled_turns_remaining = 0;
         }
 
@@ -2707,7 +2710,7 @@ void UnitInfo::Attack(int32_t grid_x, int32_t grid_y) {
         target = Access_GetAttackTarget2(this, grid_x, grid_y);
 
         if (target) {
-            target->visible_to_team[team] = true;
+            target->SetVisibleToTeam(team, true);
 
         } else {
             enemy = Access_GetTeamUnit(grid_x, grid_y, team, SELECTABLE);
@@ -2798,20 +2801,20 @@ void UnitInfo::StartBuilding() {
 void UnitInfo::InitStealthStatus() {
     for (int32_t i = PLAYER_TEAM_RED; i < PLAYER_TEAM_MAX; ++i) {
         if (unit_type == LANDMINE || unit_type == SEAMINE || unit_type == COMMANDO || unit_type == SUBMARNE) {
-            visible_to_team[i] = 0;
+            SetVisibleToTeam(i, false);
         } else {
-            visible_to_team[i] = GameManager_AllVisible;
+            SetVisibleToTeam(i, GameManager_AllVisible);
         }
 
         spotted_by_team[i] = 0;
     }
 
-    visible_to_team[team] = 1;
+    SetVisibleToTeam(team, true);
 }
 
 void UnitInfo::SpotByTeam(uint16_t team) {
     if (this->team != team && orders != ORDER_IDLE && !visible_to_team[team]) {
-        visible_to_team[team] = true;
+        SetVisibleToTeam(team, true);
         spotted_by_team[team] = true;
 
         if (UnitsManager_TeamInfo[this->team].team_type == TEAM_TYPE_COMPUTER) {
@@ -2845,7 +2848,7 @@ void UnitInfo::Draw(uint16_t team) {
     if (this->team != team &&
         (visible_to_team[team] ||
          ((unit_type == COMMANDO || unit_type == SUBMARNE || unit_type == CLNTRANS) && image_base >= 8))) {
-        visible_to_team[team] = false;
+        SetVisibleToTeam(team, false);
 
         if (unit_type == COMMANDO || unit_type == SUBMARNE || unit_type == CLNTRANS) {
             for (team = PLAYER_TEAM_RED;
@@ -2885,7 +2888,7 @@ void UnitInfo::DrawStealth(uint16_t team) {
 }
 
 void UnitInfo::Resupply() {
-    if ((flags & STATIONARY) && base_values->GetAttribute(ATTRIB_ATTACK) > 0 &&
+    if (IsComplexMember() && base_values->GetAttribute(ATTRIB_ATTACK) > 0 &&
         base_values->GetAttribute(ATTRIB_ROUNDS) > ammo) {
         Cargo materials;
         Cargo capacity;
@@ -2963,7 +2966,10 @@ void UnitInfo::UpdateProduction() {
 
     if (orders == ORDER_DISABLE || (orders == ORDER_IDLE && prior_orders == ORDER_DISABLE)) {
         if (team != PLAYER_TEAM_ALIEN) {
-            --disabled_turns_remaining;
+            // a disable that has run out stays at zero instead of wrapping around
+            if (disabled_turns_remaining > 0) {
+                --disabled_turns_remaining;
+            }
 
             if (disabled_turns_remaining == 0) {
                 SmartPointer<UnitInfo> unit_copy = MakeCopy();
@@ -2974,6 +2980,16 @@ void UnitInfo::UpdateProduction() {
 
                 } else {
                     RestoreOrders();
+
+                    // a hit during the disable left DISABLE as the order to go back to, which RestoreOrders() keeps
+                    // for the power switched building types
+                    if (orders == ORDER_DISABLE) {
+                        prior_orders = ORDER_POWER_OFF;
+                        prior_state = ORDER_STATE_EXECUTING_ORDER;
+
+                        RestoreOrders();
+                    }
+
                     Access_UpdateMapStatus(this, true);
                     Access_UpdateMapStatus(&*unit_copy, false);
 
@@ -3228,8 +3244,6 @@ void UnitInfo::StopMovement() {
 int32_t UnitInfo::GetLayingState() const { return laying_state; }
 
 void UnitInfo::SetLayingState(int32_t state) { laying_state = state; }
-
-void UnitInfo::ClearPins() { pin_count = 0; }
 
 bool UnitInfo::AttemptSideStep(int32_t grid_x, int32_t grid_y, int32_t angle) {
     bool result;
@@ -3690,6 +3704,15 @@ void UnitInfo::MoveFinished(bool mode) {
     }
 }
 
+// a move under way ends, the unit stands with a stopped move order
+void UnitInfo::StopMove() {
+    if (HasMoveOrder()) {
+        MoveFinished(false);
+        SetOrder(ORDER_MOVE);
+        SetOrderState(ORDER_STATE_EXECUTING_ORDER);
+    }
+}
+
 void UnitInfo::RadarPing() {
     if (orders != ORDER_BUILD && orders != ORDER_CLEAR &&
         (!(flags & STATIONARY) || unit_type == LANDMINE || unit_type == SEAMINE) && (flags & SELECTABLE)) {
@@ -3899,40 +3922,53 @@ int32_t UnitInfo::GetAttackRange() {
     return result;
 }
 
-void UnitInfo::UpdatePinsFromLists(int32_t grid_x, int32_t grid_y, SmartList<UnitInfo>* units, int32_t pin_units) {
-    int32_t attack_radius = base_values->GetAttribute(ATTRIB_ATTACK_RADIUS);
+std::vector<UnitInfo::AreaTarget> UnitInfo::GetAreaAttackTargets(int32_t grid_x, int32_t grid_y) {
+    std::vector<AreaTarget> targets;
+    ZoneWalker walker(Point(grid_x, grid_y), base_values->GetAttribute(ATTRIB_ATTACK_RADIUS));
 
-    for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
-        if (((*it).flags & SELECTABLE) && Access_IsWithinAttackRange(it->Get(), grid_x, grid_y, attack_radius) &&
-            Access_IsValidAttackTarget(this, it->Get(), Point(grid_x, grid_y))) {
-            (*it).pin_count += pin_units;
-        }
-    }
-}
-
-void UnitInfo::AttackAreaTargets(int32_t grid_x, int32_t grid_y) {
-    int32_t attack_radius = base_values->GetAttribute(ATTRIB_ATTACK_RADIUS);
-    ZoneWalker walker(Point(grid_x, grid_y), attack_radius);
-
-    // Iterate through all grid positions within the attack radius
+    // the map hash lists a building on each of its cells, but it is one target
     do {
         Point* location = walker.GetCurrentLocation();
         SmartList<UnitInfo>* units_at_position = Hash_MapHash[*location];
 
         if (units_at_position) {
-            // Cache the end iterator in case Hash_MapHash.Remove() deletes the list during iteration
+            const int32_t distance = Access_GetApproximateDistance(location->x - grid_x, location->y - grid_y);
+
             for (auto it = units_at_position->Begin(), it_end = units_at_position->End(); it != it_end; ++it) {
-                if (((*it).flags & SELECTABLE) && Access_IsValidAttackTarget(this, it->Get(), Point(grid_x, grid_y))) {
-                    if (((*it).unit_type != BRIDGE && (*it).unit_type != WTRPLTFM) ||
-                        !Access_IsUnitBusyAtLocation(it->Get())) {
-                        (*it).AttackUnit(this,
-                                         Access_GetApproximateDistance((*it).grid_x - grid_x, (*it).grid_y - grid_y),
-                                         UnitsManager_GetTargetAngle((*it).grid_x - grid_x, (*it).grid_y - grid_y));
+                // the unit on a bridge or water platform takes the blast for it
+                if (((*it).flags & SELECTABLE) && (*it).GetOrder() != ORDER_IDLE &&
+                    Access_IsValidAttackTarget(this, it->Get(), Point(grid_x, grid_y)) &&
+                    (((*it).unit_type != BRIDGE && (*it).unit_type != WTRPLTFM) ||
+                     !Access_IsUnitBusyAtLocation(it->Get()))) {
+                    AreaTarget* target = nullptr;
+
+                    for (auto& item : targets) {
+                        if (item.unit == it->Get()) {
+                            target = &item;
+                            break;
+                        }
+                    }
+
+                    if (!target) {
+                        targets.push_back({it->Get(), distance});
+
+                    } else if (distance < target->distance) {
+                        target->distance = distance;
                     }
                 }
             }
         }
     } while (walker.FindNext());
+
+    return targets;
+}
+
+void UnitInfo::AttackAreaTargets(int32_t grid_x, int32_t grid_y) {
+    for (const auto& target : GetAreaAttackTargets(grid_x, grid_y)) {
+        target.unit->AttackUnit(
+            this, target.distance,
+            UnitsManager_GetTargetAngle(target.unit->grid_x - grid_x, target.unit->grid_y - grid_y));
+    }
 }
 
 void UnitInfo::UpgradeInt() {
@@ -3981,7 +4017,7 @@ void UnitInfo::UpgradeInt() {
 }
 
 void UnitInfo::Regenerate() {
-    if (!damaged_this_turn && (flags & STATIONARY) && base_values->GetAttribute(ATTRIB_HITS) != hits) {
+    if (!damaged_this_turn && IsComplexMember() && base_values->GetAttribute(ATTRIB_HITS) != hits) {
         Cargo materials;
         Cargo capacity;
 
@@ -4039,7 +4075,7 @@ void UnitInfo::StepMoveUnit(Point position) {
                     Access_UpdateMapStatus(this, true);
                     Access_UpdateMapStatus(&*unit_copy, false);
 
-                    if (orders == ORDER_MOVE || orders == ORDER_MOVE_TO_UNIT || orders == ORDER_MOVE_TO_ATTACK) {
+                    if (HasMoveOrder()) {
                         BlockedOnPathRequest();
                     }
 
@@ -4051,21 +4087,19 @@ void UnitInfo::StepMoveUnit(Point position) {
 }
 
 /* the hidden units that the start of a building moves off its site */
-template <typename Function>
-static void UnitInfo_ForEachUnitToDisplace(Point position, uint32_t unit_flags, Function&& function) {
+static void UnitInfo_GetUnitsToDisplace(Point position, uint32_t unit_flags, SmartList<UnitInfo>* units) {
     if (unit_flags & BUILDING) {
         Point site;
 
         for (site.x = position.x; site.x < position.x + 2; ++site.x) {
             for (site.y = position.y; site.y < position.y + 2; ++site.y) {
-                const auto units = Hash_MapHash[site];
+                const auto site_units = Hash_MapHash[site];
 
-                if (units) {
-                    // the end node must be cached in case Hash_MapHash.Remove() deletes the list
-                    for (auto it = units->Begin(), it_end = units->End(); it != it_end; ++it) {
+                if (site_units) {
+                    for (auto it = site_units->Begin(), it_end = site_units->End(); it != it_end; ++it) {
                         if ((*it).GetUnitType() == COMMANDO || (*it).GetUnitType() == SUBMARNE ||
                             (*it).GetUnitType() == CLNTRANS) {
-                            function(*it);
+                            units->PushBack(*it);
                         }
                     }
                 }
@@ -4076,21 +4110,31 @@ static void UnitInfo_ForEachUnitToDisplace(Point position, uint32_t unit_flags, 
 
 static bool UnitInfo_IsSiteEngaged(UnitInfo* builder, ResourceID unit_type) {
     SmartPointer<UnitInfo> utility_unit(Access_GetConstructionUtility(builder->team, builder->grid_x, builder->grid_y));
-    bool result{false};
+    SmartList<UnitInfo> units;
 
-    UnitInfo_ForEachUnitToDisplace(Point(utility_unit->grid_x, utility_unit->grid_y),
-                                   ResourceManager_GetUnit(unit_type).GetFlags(),
-                                   [&result](UnitInfo& unit) { result = result || UnitsManager_IsEngaged(&unit); });
+    UnitInfo_GetUnitsToDisplace(Point(utility_unit->grid_x, utility_unit->grid_y),
+                                ResourceManager_GetUnit(unit_type).GetFlags(), &units);
 
-    return result;
+    for (auto it = units.Begin(), it_end = units.End(); it != it_end; ++it) {
+        if (UnitsManager_IsEngaged(it->Get())) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void UnitInfo::PrepareConstructionSite(ResourceID unit_type) {
     uint32_t unit_flags = ResourceManager_GetUnit(unit_type).GetFlags();
     SmartPointer<UnitInfo> utility_unit(Access_GetConstructionUtility(team, grid_x, grid_y));
     Point position(utility_unit->grid_x, utility_unit->grid_y);
+    SmartList<UnitInfo> units;
 
-    UnitInfo_ForEachUnitToDisplace(position, unit_flags, [&position](UnitInfo& unit) { unit.StepMoveUnit(position); });
+    UnitInfo_GetUnitsToDisplace(position, unit_flags, &units);
+
+    for (auto it = units.Begin(), it_end = units.End(); it != it_end; ++it) {
+        (*it).StepMoveUnit(position);
+    }
 
     if (unit_flags & REQUIRES_SLAB) {
         ResourceID slab_type = (unit_flags & BUILDING) ? LRGSLAB : SMLSLAB;
@@ -4423,6 +4467,11 @@ void UnitInfo::PositionInTape() {
 
             Access_UpdateMapStatus(this, true);
             Access_UpdateMapStatus(&*copy, false);
+
+            // back in the middle of its site after a failed way off, the builder is ready to leave again
+            if (orders == ORDER_BUILD) {
+                ScheduleDelayedTasks(true);
+            }
         }
 
     } else {
@@ -4436,6 +4485,21 @@ void UnitInfo::PositionInTape() {
             RefreshScreen();
         }
     }
+}
+
+/* Takes a builder that failed to leave the 2x2 building it finished back to the middle of the site the way it left, so
+ * that it can leave again towards any square around the building.
+ */
+void UnitInfo::ReturnToConstructionSite(UnitInfo* building) {
+    // heading for the square of the site opposite its own, the positioning stops in the middle of the site
+    move_to_grid_x = (grid_x == building->grid_x) ? building->grid_x + 1 : building->grid_x;
+    move_to_grid_y = (grid_y == building->grid_y) ? building->grid_y + 1 : building->grid_y;
+
+    SetParent(building);
+    SetOrder(ORDER_BUILD);
+    SetOrderState(ORDER_STATE_UNIT_READY);
+
+    UnitsManager_SetNewOrderInt(this, ORDER_AWAIT_TAPE_POSITIONING, ORDER_STATE_TAPE_POSITIONING_DEINIT);
 }
 
 void UnitInfo::PlaceMine() {
@@ -4733,6 +4797,10 @@ void UnitInfo::PrepareFire() {
 
         new_unit->SetParent(this);
 
+        // the missile carries the attack to the impact, as it carries the target cell
+        new_unit->live_attack = live_attack;
+        live_attack = 0;
+
         new_unit->SetOrder(ORDER_MOVE);
         new_unit->SetOrderState(ORDER_STATE_INIT);
 
@@ -4790,6 +4858,7 @@ void UnitInfo::ProgressFire() {
         }
 
         if (!(flags & FIRES_MISSILES)) {
+            UnitsManager_EndAttack(this);
             Attack(fire_on_grid_x, fire_on_grid_y);
 
             UnitsManager_AddToDelayedReactionList(this);
@@ -4813,16 +4882,20 @@ void UnitInfo::ChangeTeam(uint16_t target_team) {
     ClearUnitList();
     SetParent(nullptr);
     SetEnemy(nullptr);
+
+    // the path goes with the old team, so a move under way stops here
+    StopMove();
+
     path = nullptr;
     RemoveTasks();
     Ai_RemoveUnit(this);
     Access_UpdateMapStatus(this, false);
 
     if (UnitsManager_TeamInfo[team].heat_map) {
-        visible_to_team[team] = UnitsManager_TeamInfo[team].heat_map->GetComplete(grid_x, grid_y) > 0;
+        SetVisibleToTeam(team, UnitsManager_TeamInfo[team].heat_map->GetComplete(grid_x, grid_y) > 0);
 
     } else {
-        visible_to_team[team] = false;
+        SetVisibleToTeam(team, false);
     }
 
     flags &= ~UnitsManager_TeamInfo[team].team_units->hash_team_id;
@@ -4839,7 +4912,7 @@ void UnitInfo::ChangeTeam(uint16_t target_team) {
 
     Access_UpdateMapStatus(this, true);
 
-    visible_to_team[target_team] = true;
+    SetVisibleToTeam(target_team, true);
 
     Ai_UpdateTerrainDistanceField(this);
     Ai_UnitSpotted(this, old_team);

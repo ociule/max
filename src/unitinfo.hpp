@@ -66,7 +66,6 @@ private:
     void AttachComplex(Complex* complex);
     void TestConnections();
     UnitInfo* GetFirstUntestedConnection();
-    void UpdatePinsFromLists(int32_t grid_x, int32_t grid_y, SmartList<UnitInfo>* units, int32_t pin_units);
     void AttackAreaTargets(int32_t grid_x, int32_t grid_y);
     void RadarPing();
     void UpgradeInt();
@@ -98,6 +97,15 @@ public:
     static constexpr uint32_t AI_STATE_MOVE_FINISHED_REMINDER = 0x00000100;
     static constexpr uint32_t AI_STATE_RETREAT_REMINDER = 0x00000200;
 
+    // id of units that are not in the unit hash
+    static constexpr uint32_t NO_ID = UINT32_MAX;
+
+    // a unit that an area attack reaches, with the distance of its cell nearest to the impact
+    struct AreaTarget {
+        SmartPointer<UnitInfo> unit;
+        int32_t distance;
+    };
+
     /**
      * The default constructor is only usable in special use cases.
      */
@@ -108,10 +116,10 @@ public:
      *
      * \param unit_type one of the ResourceID enum values below UNIT_END
      * \param team unit one of the PlayerTeamType enum values
-     * \param id unit hash between 0x0000 - 0xFFFE, 0xFFFF is the invalid id
+     * \param id unique unit id, NO_ID for units that are not in the unit hash
      * \param angle one of the UnitAngle enum values
      */
-    UnitInfo(ResourceID unit_type, uint16_t team, uint16_t id, uint8_t angle = 0);
+    UnitInfo(ResourceID unit_type, uint16_t team, uint32_t id, uint8_t angle = 0);
 
     /** Copy constructor. */
     UnitInfo(const UnitInfo& other);
@@ -238,9 +246,21 @@ public:
     void FileSave(SmartFileWriter& file) noexcept;
     static int32_t GetDrawLayer(ResourceID unit_type);
     bool IsVisibleToTeam(uint16_t team) const;
+    void SetVisibleToTeam(uint16_t team, bool visible);
     void SetEnemy(UnitInfo* enemy);
     UnitInfo* GetEnemy() const;
-    uint16_t GetId() const;
+    uint32_t GetId() const;
+
+    // connectors, buildings and standalone units that are not ground cover belong to a complex
+    [[nodiscard]] bool IsComplexMember() const noexcept {
+        return (flags & (CONNECTOR_UNIT | BUILDING | STANDALONE)) && !(flags & GROUND_COVER) && id != NO_ID;
+    }
+
+    // the orders that move a unit along its path
+    [[nodiscard]] bool HasMoveOrder() const noexcept {
+        return orders == ORDER_MOVE || orders == ORDER_MOVE_TO_UNIT || orders == ORDER_MOVE_TO_ATTACK;
+    }
+
     UnitInfo* GetFirstFromUnitList() const;
     SmartList<UnitInfo>* GetUnitList() const;
     uint32_t GetAiStateBits() const;
@@ -253,7 +273,6 @@ public:
     Complex* GetComplex() const;
     int32_t GetLayingState() const;
     void SetLayingState(int32_t state);
-    void ClearPins();
     void SetBuildRate(int32_t value);
     int32_t GetBuildRate() const;
     void SetRepeatBuildState(bool value);
@@ -279,10 +298,11 @@ public:
     void AttachToPrimaryComplex(Complex* primary_complex = nullptr);
     void DetachComplex();
     void UpdateTurretAngle(int32_t turret_angle, bool redraw = false);
-    void UpdatePinCount(int32_t grid_x, int32_t grid_y, int32_t pin_units);
+    std::vector<AreaTarget> GetAreaAttackTargets(int32_t grid_x, int32_t grid_y);
     void Attack(int32_t grid_x, int32_t grid_y);
     SmartPointer<UnitInfo> MakeCopy();
     void MoveFinished(bool mode = true);
+    void StopMove();
     void BlockedOnPathRequest(bool mode = true, bool skip_notification = false);
     void RestoreOrders();
     void FollowUnit();
@@ -343,6 +363,7 @@ public:
     void Render(Rect* bounds);
     void RenderWithConnectors(Rect* bounds);
     void PositionInTape();
+    void ReturnToConstructionSite(UnitInfo* building);
     void PlaceMine();
     void PickUpMine();
     bool ShakeWater();
@@ -451,7 +472,7 @@ public:
     SmartObjectArray<ResourceID> build_list;
     uint16_t build_rate;
     uint8_t repeat_build;
-    uint16_t id;
+    uint32_t id;
     SmartList<UnitInfo>* unit_list;
     SmartPointer<UnitInfo> enemy_unit;
     SmartList<Task> tasks;
@@ -459,6 +480,8 @@ public:
     bool in_transit;
     Point last_target;
     int16_t pin_count;
+    // the number of the live attack that this unit holds, 0 for none
+    uint32_t live_attack;
     bool tasks_enabled;
     uint8_t laying_state;
     uint8_t visible_to_team[PLAYER_TEAM_MAX];

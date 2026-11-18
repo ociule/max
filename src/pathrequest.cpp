@@ -56,10 +56,7 @@ uint8_t PathRequest::GetCautionLevel() const { return caution_level; }
 bool PathRequest::TryUseCachedPath() { return false; }
 
 void PathRequest::Cancel() {
-    if (client->hits &&
-        (client->GetOrder() == ORDER_MOVE || client->GetOrder() == ORDER_MOVE_TO_UNIT ||
-         client->GetOrder() == ORDER_MOVE_TO_ATTACK) &&
-        client->GetOrderState() == ORDER_STATE_NEW_ORDER) {
+    if (client->hits && client->HasMoveOrder() && client->GetOrderState() == ORDER_STATE_NEW_ORDER) {
         UnitsManager_SetNewOrder(&*client, client->GetOrder(), ORDER_STATE_PATH_REQUEST_CANCEL);
     }
 
@@ -100,7 +97,7 @@ void PathRequest::CreateTransport(ResourceID unit_type) {
     if (unit_type != INVALID_ID) {
         AILOG(log, "Use {}.", ResourceManager_GetUnit(unit_type).GetSingularName().data());
 
-        transporter = new (std::nothrow) UnitInfo(unit_type, client->team, 0xFFFF);
+        transporter = new (std::nothrow) UnitInfo(unit_type, client->team, UnitInfo::NO_ID);
 
     } else {
         transporter = nullptr;
