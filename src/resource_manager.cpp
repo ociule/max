@@ -251,7 +251,7 @@ bool ResourceManager_GetBasePath(std::filesystem::path& path) {
             local_path = std::filesystem::current_path(ec).lexically_normal();
         }
 
-    } else if (!std::strcmp(platform, "Linux")) {
+    } else if (!std::strcmp(platform, "Linux") || !std::strcmp(platform, "macOS")) {
         const auto xdg_data_dirs = SDL_getenv("XDG_DATA_DIRS");
 
         if (xdg_data_dirs) {
@@ -345,7 +345,7 @@ bool ResourceManager_GetPrefPath(std::filesystem::path& path) {
             }
         }
 
-    } else if (!std::strcmp(platform, "Linux")) {
+    } else if (!std::strcmp(platform, "Linux") || !std::strcmp(platform, "macOS")) {
         const auto xdg_data_home = SDL_getenv("XDG_DATA_HOME");
 
         if (xdg_data_home) {

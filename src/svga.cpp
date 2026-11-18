@@ -106,6 +106,12 @@ Uint32 Svga_SetupDisplayMode(SDL_Rect* bounds) {
 
     Svga_DisplayPixelFormat = detected_display_mode->format;
 
+    // the palette's colors have alpha 0 (Color_SetSystemPaletteEntry): a display format with alpha, as macOS reports
+    // (ARGB8888), would make every frame transparent, so draw without alpha
+    if (SDL_ISPIXELFORMAT_ALPHA(Svga_DisplayPixelFormat)) {
+        Svga_DisplayPixelFormat = SDL_PIXELFORMAT_XRGB8888;
+    }
+
     Svga_ScreenMode = settings->GetNumericValue("screen_mode");
     Svga_ScaleQuality = settings->GetNumericValue("scale_quality");
     Svga_ScreenWidth = settings->GetNumericValue("window_width");
